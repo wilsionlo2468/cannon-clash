@@ -73,14 +73,71 @@
   }
 
   /**
+   * firstLandingX(x0, y0, angleDeg, power, wind) -> number
+   * The x of the shot's REAL landing: the first Terrain.hit along the
+   * integrated path (segment 0 skipped — the muzzle rests ON its platform
+   * surface; see corridor). A trajectory that overflies the whole field
+   * (possible past power ~90 on the pinned terrain) never touches the
+   * polyline, so the fictitious y=1500 impact stands in — a monotone
+   * "lands beyond the field" sentinel for the solver, never a near-target
+   * answer.
+   */
+  function firstLandingX(x0, y0, angleDeg, power, wind) {
+    var flight = CC.Ballistics.simulate(x0, y0, angleDeg, power, wind);
+    var points = flight.points;
+    for (var i = 2; i < points.length; i++) {
+      var a = points[i - 1];
+      var b = points[i];
+      var h = CC.Terrain.hit(a.x, a.y, b.x, b.y);
+      if (h) { return h.x; }
+    }
+    return flight.impact.x;
+  }
+
+  /**
+   * solveTerrainPower(x0, y0, xTarget, angleDeg, wind) -> power|null
+   * R14: binary-searches power in [0, 100] so the shot's REAL landing x
+   * (firstLandingX — simulate + Terrain.hit per probe) equals xTarget;
+   * 40 bisection rounds. The real landing is monotone in the shooting
+   * direction but steep (~29px per power point near the solution) with
+   * terrain-regime jumps, so every probe is ranked and the power whose
+   * landing came closest to xTarget wins (the ruling's best-of-40 rule).
+   * Returns null only when the endpoints do not bracket xTarget — the
+   * target lies beyond the tier's real-landing reach. Ballistics's own
+   * solvePower (y=1500 stop-line impact) is left to the ballistics module;
+   * the AI's perfect solution targets real landings only.
+   */
+  function solveTerrainPower(x0, y0, xTarget, angleDeg, wind) {
+    var ITERS = 40;
+    var lo = 0;
+    var hi = 100;
+    var fLo = firstLandingX(x0, y0, angleDeg, lo, wind) - xTarget;
+    var fHi = firstLandingX(x0, y0, angleDeg, hi, wind) - xTarget;
+    var best = Math.abs(fLo) < Math.abs(fHi)
+      ? { power: lo, miss: Math.abs(fLo) }
+      : { power: hi, miss: Math.abs(fHi) };
+    if ((fLo < 0) === (fHi < 0)) { return null; } // beyond the real reach
+    for (var i = 0; i < ITERS; i++) {
+      var mid = (lo + hi) / 2;
+      var f = firstLandingX(x0, y0, angleDeg, mid, wind) - xTarget;
+      var miss = Math.abs(f);
+      if (miss < best.miss) { best = { power: mid, miss: miss }; }
+      if ((f < 0) === (fLo < 0)) { lo = mid; } else { hi = mid; }
+    }
+    return best.power;
+  }
+
+  /**
    * perfectShot(shooter, foe, wind, turn) -> {angle, power}
-   * The brief's perfect solution: per elevation tier (35/45/55, in order)
-   * solve the power whose stop-line impact lands on the enemy's x, then
-   * keep the first tier whose corridor stays clear until it reaches the
-   * enemy. Every tier may be blocked — on the pinned field the valley wall
-   * always occludes the descending leg — so the fallback takes the blocked
-   * tier whose real landing is closest to the enemy center. Unreachable
-   * tiers (solvePower null) are skipped; if every tier were unreachable
+   * The brief's perfect solution, per ruling R14: per elevation tier
+   * (35/45/55, in order) solve the power whose REAL terrain landing hits
+   * the enemy's x (solveTerrainPower above — never the fictitious y=1500
+   * impact), then keep the first tier whose corridor stays clear until it
+   * reaches the enemy. A tier that cannot reach the enemy x as a real
+   * landing (solveTerrainPower null) is skipped, and a tier whose solved
+   * landing still misses the near-hit window (terrain-regime jumps can
+   * overshoot) falls to the fallback: the blocked tier whose real landing
+   * is closest to the enemy center. If every tier were unreachable
    * (impossible for the pinned stances — max range dwarfs their
    * separation) a maximal 45° shot keeps pickShot total for the view.
    */
@@ -90,7 +147,7 @@
     for (var i = 0; i < TIERS.length; i++) {
       var angle = TIERS[i];
       var dir = turn === 'P1' ? angle : 180 - angle;
-      var power = CC.Ballistics.solvePower(shooter.x, shooter.y, foe.x, dir, wind);
+      var power = solveTerrainPower(shooter.x, shooter.y, foe.x, dir, wind);
       if (power === null) { continue; }
       var c = corridor(shooter.x, shooter.y, dir, power, wind, foe);
       if (c.clear) {

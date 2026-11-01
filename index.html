@@ -18,8 +18,9 @@
 </head>
 <body>
   <canvas id="game" width="1600" height="900"></canvas>
-  <!-- Script order matters: view modules first, then the entry point.
+  <!-- Script order matters: core modules first, then view, then the entry point.
        Later tasks append their own files here (core -> view -> main). -->
+  <script src="src/core/ballistics.js"></script>
   <script src="src/view/loader.js"></script>
   <script src="src/view/layers.js"></script>
   <script src="src/main.js"></script>

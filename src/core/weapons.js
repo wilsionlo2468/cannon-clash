@@ -16,13 +16,15 @@
     cluster: { name: '集束彈', dmg: 12, count: 1,        radius: 35, children: 3 }
   };
 
-  // Cluster scatter distances, pinned by the brief: the three children
-  // land at impact.x ± SPREAD[i] (magnitude per child in order, sign
-  // random). Cluster does NOT detonate at its own impact — the brief
-  // settles only the three children (confirmed with the user 2026-11-01)
-  // — so this spread is the cluster's entire damage delivery. Kept off
-  // LIST: the brief pins the LIST literal verbatim.
-  var SPREAD = [60, 90, 120];
+  // Cluster scatter offsets, pinned by controller ruling R10: child 1
+  // lands exactly on the main impact (offset 0 — a direct hit always
+  // connects), children 2 and 3 land at impact.x ± SPREAD[i] with the
+  // side drawn from rng(). Cluster does not detonate at its own impact —
+  // the brief's settlement clause covers only the three children — so
+  // the children are the cluster's entire damage delivery (dmg12/radius35
+  // unchanged by R10). Kept off LIST: the brief pins the LIST literal
+  // verbatim.
+  var SPREAD = [0, 90, 180];
 
   function weapon(key) {
     var w = LIST[key];
@@ -34,10 +36,11 @@
    * explosions(key, impact, rng) -> [{x, y}, ...]
    * Every explosion point a shell of `key` produces when it lands at
    * `impact`: the impact itself for normal/heavy/pierce; for cluster the
-   * three children — impact.x ± SPREAD[i] with the sign drawn from rng()
-   * (one call per child), landing y = Terrain.heightAt(x) — the main
-   * impact being only the scatter origin. rng is a () -> [0,1) source
-   * (Math.random in play); injected so tests pin the signs deterministically.
+   * three children — child 1 exactly on the impact (no rng), children
+   * 2/3 at impact.x ± 90/± 180 with the side drawn from rng() (one call
+   * each), landing y = Terrain.heightAt(x) — the main impact being only
+   * the scatter origin (R10). rng is a () -> [0,1) source (Math.random
+   * in play); injected so tests pin the sides deterministically.
    * Needs CC.Terrain (loaded first per index.html order).
    */
   function explosions(key, impact, rng) {
@@ -45,7 +48,9 @@
     if (!w.children) { return [{ x: impact.x, y: impact.y }]; }
     var points = [];
     for (var i = 0; i < w.children; i++) {
-      var x = impact.x + (rng() < 0.5 ? -1 : 1) * SPREAD[i];
+      var off = SPREAD[i];
+      var x = impact.x;
+      if (off !== 0) { x += (rng() < 0.5 ? -1 : 1) * off; } // offset 0: fixed, no rng
       points.push({ x: x, y: CC.Terrain.heightAt(x) });
     }
     return points;

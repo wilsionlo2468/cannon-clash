@@ -12,10 +12,12 @@
  *   settlement: explosion point within a cannon center's radius
  *     (dist < radius) -> dmg = dmg * (1 - dist/radius), linear falloff,
  *     rounded (四捨五入)
- *   cluster: after landing, 3 children land at impact ±(60,90,120)px
- *     random-sign offsets and ONLY the children settle (dmg12/radius35);
- *     the main impact is the scatter origin and does not detonate
- *     (confirmed with the user 2026-11-01)
+ *   cluster: after landing, 3 children land and ONLY the children settle
+ *     (dmg12/radius35); the main impact is the scatter origin and does
+ *     not detonate (brief literal: the settlement clause covers only the
+ *     3 children). Scatter offsets per controller ruling R10: child 1
+ *     exactly on the impact, children 2/3 at impact ±90/±180px (random
+ *     side) — a direct hit always deals its 12
  *   Cannon.create(side) -> {side, x, y, hp:100, angle:45, power:0,
  *     ammo, weapon:'normal'} with spend/onHit/refill; P1 x=250 y=400,
  *     P2 x=1300 y=445 (terrain platform tops, pinned by the task-3 tests)
@@ -198,38 +200,40 @@ test('explosions: direct shells explode once where they land, rng untouched', ()
   assert.strictEqual(rngCalls, 0, 'no hidden randomness for direct shells');
 });
 
-test('explosions: cluster is its 3 children only — the main impact never detonates', () => {
+test('explosions: cluster is its 3 children only — child 1 lands on the impact (R10)', () => {
   const impact = { x: 250, y: 400 };
   const pts = W.explosions('cluster', impact, always(0.9));
 
-  assert.strictEqual(pts.length, 3);
+  assert.strictEqual(pts.length, 3, 'exactly 3 explosions: main impact is child 1, not an extra');
+  assert.deepStrictEqual(pts[0], impact, 'child 1 lands exactly on the main impact');
+  assert.strictEqual(Math.abs(pts[1].x - impact.x), 90, 'child 2 scatters 90px');
+  assert.strictEqual(Math.abs(pts[2].x - impact.x), 180, 'child 3 scatters 180px');
   assert.deepStrictEqual(pts, [
-    { x: 310, y: 400 }, // +60, still on the left platform (heightAt 400)
+    { x: 250, y: 400 }, // offset 0: the impact itself (still on the left platform)
     { x: 340, y: 400 }, // +90
-    { x: 370, y: 400 }, // +120
+    { x: 430, y: 400 }, // +180 (platform end vertex (430,400))
   ]);
-  for (const p of pts) {
-    assert.ok(!(p.x === impact.x && p.y === impact.y), 'main impact is not an explosion point');
-  }
 
-  // rng() < 0.5 flips the offset to the negative side.
-  assert.deepStrictEqual(W.explosions('cluster', { x: 300, y: 400 }, always(0.1)), [
-    { x: 240, y: 400 },
-    { x: 210, y: 400 },
-    { x: 180, y: 400 },
+  // rng() < 0.5 flips the scattered children to the negative side.
+  const neg = W.explosions('cluster', { x: 350, y: 400 }, always(0.1));
+  assert.deepStrictEqual(neg, [
+    { x: 350, y: 400 }, // child 1: fixed, no side
+    { x: 260, y: 400 }, // -90
+    { x: 170, y: 400 }, // -180 (platform start vertex (170,400))
   ]);
 });
 
-test('explosions: cluster children land ON the terrain, one rng call per child', () => {
-  // Mixed signs from the stub [+,-,-]; magnitudes 60/90/120 in child order.
-  // Off the right platform edge the landing y comes from Terrain.heightAt:
-  // child 3 drops onto the valley slope at x=1085 (heightAt(1085) === 652.5,
-  // pinned by the task-3 tests).
-  const impact = { x: 1205, y: 445 };
-  const pts = W.explosions('cluster', impact, signs(0.9, 0.1, 0.1));
+test('explosions: scattered children land ON the terrain, rng drawn only for them', () => {
+  // Mixed sides from the stub [+,-] (child 1 needs no rng). Off the right
+  // platform edge the landing y comes from Terrain.heightAt: child 3 drops
+  // onto the valley slope at x=1085 (heightAt(1085) === 652.5, pinned by
+  // the task-3 tests).
+  const impact = { x: 1265, y: 445 };
+  const pts = W.explosions('cluster', impact, signs(0.9, 0.1));
 
-  assert.deepStrictEqual(pts.map((p) => p.x), [1265, 1115, 1085], '±60/±90/±120 in child order');
-  assert.strictEqual(pts[0].y, 445, 'child 1 lands back on the right platform');
+  assert.deepStrictEqual(pts.map((p) => p.x), [1265, 1355, 1085], '0 / ±90 / ±180 in child order');
+  assert.strictEqual(pts[0].y, 445, 'child 1 sits on the right platform');
+  assert.strictEqual(pts[1].y, 445, 'child 2 lands back on the right platform');
   assert.strictEqual(pts[2].y, 652.5, 'child 3 lands on the pinned slope height');
   for (const p of pts) {
     assert.ok(Math.abs(p.y - T.heightAt(p.x)) < 1e-9, 'child lands on the ground at x=' + p.x);
@@ -237,7 +241,25 @@ test('explosions: cluster children land ON the terrain, one rng call per child',
 
   let calls = 0;
   W.explosions('cluster', impact, () => { calls++; return 0.5; });
-  assert.strictEqual(calls, 3, 'exactly one rng call per child');
+  assert.strictEqual(calls, 2, 'rng is drawn once per scattered child, never for child 1');
+});
+
+test('cluster direct hit on an enemy stance deals its 12 (R10 guarantees contact)', () => {
+  const p1 = C.create('P1');
+  const p2 = C.create('P2');
+
+  // Perfect aim at P2's base: child 1 lands exactly on it (dist 0 -> 12);
+  // children 2/3 scatter 90/180px away, outside radius 35 on either side.
+  let total = 0;
+  for (const pt of W.explosions('cluster', { x: p2.x, y: p2.y }, always(0.1))) {
+    for (const h of W.settle('cluster', pt, [p1, p2])) {
+      if (h.cannon === p2) { total += h.dmg; }
+      h.cannon.onHit(h.dmg);
+    }
+  }
+  assert.strictEqual(total, 12, 'child 1 connects at the center, scatter stays outside r35');
+  assert.strictEqual(p2.hp, 88);
+  assert.strictEqual(p1.hp, 100, 'the far cannon is untouched');
 });
 
 test('unknown weapon keys throw a clear error', () => {

@@ -29,6 +29,10 @@
  *       that no longer exist; on the flat platform the direction measure
  *       compresses to <1° for landings up to ~290px away)
  *   the AI fires 普通彈 only
+ *   defensive branches are pinned too: all-blocked -> the closest-landing
+ *     fallback (strict-less keeps the first tier on the structural field-
+ *     corner tie), unreachable foe -> null-skip -> the defensive maximal
+ *     shot, and the corridor's enemy-column crossing clear
  */
 
 const { test } = require('node:test');
@@ -288,4 +292,71 @@ test('unknown difficulty throws; pickShot mutates nothing', () => {
   };
   assert.deepStrictEqual(after, before,
     'pickShot is a pure read: the view applies the returned shot');
+});
+
+test('all tiers blocked -> the closest-landing fallback wins deterministically', () => {
+  // Synthetic geometry: a foe just past the field's right end (x=1680;
+  // heightAt clamps to 380 there). Every tier's best real landing is the
+  // field corner (1600,380) — the last polyline point any trajectory can
+  // touch — so all three are blocked (80px >= 50) and the fallback takes
+  // the closest landing. The three probes converge on the corner to within
+  // float noise of each other, and the numerically closest wins: 45° under
+  // the pinned solver, deterministically. (A coarser three-way race is
+  // unreachable on the real terrain: in-field foes solve exactly for every
+  // tier, so blocked tiers can only ever meet at the corner.)
+  const p1 = C.create('P1');
+  const foe = fakeCannon('P2', 1680, 380);
+  const match = M.create({ p1, p2: foe }, { rng: () => 0.5 });
+
+  const shot = AI.pickShot(match, 'hell', NO_ERROR);
+  assert.strictEqual(shot.angle, 45, 'the closest-landing tier wins the fallback');
+  assert.strictEqual(shot.weapon, 'normal');
+  const landing = realLanding(p1.x, p1.y, shot.angle, shot.power, 0);
+  assert.ok(Math.abs(landing.x - 1600) < 0.5 && Math.abs(landing.y - 380) < 0.5,
+    'the best real landing is the field corner: ' +
+    landing.x.toFixed(2) + ',' + landing.y.toFixed(2));
+  assert.ok(missDist(landing, foe) >= 50,
+    'the shot is genuinely blocked: ' + missDist(landing, foe).toFixed(1) + 'px');
+  assert.deepStrictEqual(AI.pickShot(match, 'hell', NO_ERROR), shot,
+    'the fallback is deterministic');
+});
+
+test('unreachable foe -> every tier skips -> the defensive maximal shot', () => {
+  // Synthetic geometry: a foe BEHIND the shooter. No tier brackets the
+  // target (every real landing is past it), so the terrain solver returns
+  // null three times — the null-skip — and pickShot falls through to its
+  // defensive total shot: the view can never receive null.
+  const p1 = C.create('P1');
+  const foe = fakeCannon('P2', 200, 400);
+  const match = M.create({ p1, p2: foe }, { rng: () => 0.5 });
+
+  assert.deepStrictEqual(AI.pickShot(match, 'hell', NO_ERROR),
+    { angle: 45, power: 100, weapon: 'normal' });
+});
+
+test('foe reachable only past the field -> the corridor clears at the enemy-column crossing', () => {
+  // Synthetic geometry: a foe at x=2500, far past the field. No real
+  // landing goes past the corner (1600,380), so the tier's best probe is
+  // an overflying trajectory whose fictitious y=1500 crossing lands
+  // nearest the foe (the overfly sentinel). That flight never touches the
+  // polyline, so the corridor's verdict is the enemy-column crossing: the
+  // shell flies over the foe and counts as clear — the first tier wins
+  // through this branch alone.
+  const p1 = C.create('P1');
+  const foe = fakeCannon('P2', 2500, 445);
+  const match = M.create({ p1, p2: foe }, { rng: () => 0.5 });
+
+  const shot = AI.pickShot(match, 'hell', NO_ERROR);
+  assert.strictEqual(shot.angle, 35, 'the first tier clears via the crossing');
+  const flight = B.simulate(p1.x, p1.y, shot.angle, shot.power, 0);
+  let contact = null;
+  for (let i = 2; i < flight.points.length && !contact; i++) {
+    const a = flight.points[i - 1];
+    const b = flight.points[i];
+    contact = T.hit(a.x, a.y, b.x, b.y);
+  }
+  assert.strictEqual(contact, null, 'pure overfly: no terrain contact at all');
+  assert.ok(flight.impact.x > 2500,
+    'the shell crossed the enemy column in the air: fictitious x ' +
+    flight.impact.x.toFixed(1));
 });

@@ -12,9 +12,12 @@
   var DEFAULT_TURN_LIMIT = 30; // seconds
   var AUTO_FIRE_POWER = 50;
 
-  // Brief pin: wind = round(random*10 - 5) -> integer -5..+5.
+  // Controller ruling R12: wind is UNIFORM over the integers -5..+5 —
+  // floor(random*11) - 5 gives all 11 values equal probability 1/11.
+  // (Supersedes the task-brief step-3 round formula, whose two edge
+  // values were half as likely as the inner nine.)
   function rollWind(rng) {
-    return Math.round(rng() * 10 - 5);
+    return Math.floor(rng() * 11) - 5;
   }
 
   function other(side) {

@@ -20,7 +20,9 @@
  *     staying SUDDEN until decided — with HP clamped at 0-0 the deciding
  *     shot's per-landing damage is the only live tiebreaker (less damage
  *     taken = higher effective HP)
- *   wind = round(random*10 - 5) -> integer -5..+5 (controller pin)
+ *   wind = floor(random*11) - 5 -> integer -5..+5, uniform over the 11
+ *     values (controller ruling R12; supersedes the brief's round formula,
+ *     whose edge weights were half)
  *   streak: create opts streakKey/streakSide; OVER carries
  *     {winner, rounds, streakDelta}: +1 win / -1 loss for the holder,
  *     null without a streakKey
@@ -96,18 +98,22 @@ test('create rejects missing or non-cannon p1/p2', () => {
   assert.throws(() => M.create({ p1: {}, p2: {} }), /CC\.Match\.create/);
 });
 
-test('wind roll is round(random*10 - 5), pinned through an injected rng', () => {
-  const cases = [
-    [0.96, 5],   // 4.6  -> 5
-    [0.04, -5],  // -4.6 -> -5
-    [0.5, 0],    // 0    -> 0
-    [0.25, -2],  // -2.5 -> -2 (round half up, not floor)
-    [0.75, 3],   // 2.5  -> 3
-  ];
-  for (const [draw, expected] of cases) {
+test('wind roll is uniform over -5..+5: floor(random*11) - 5 (R12)', () => {
+  // Ruling R12 pins the endpoints: rng 0 / 0.5 / 0.999 -> -5 / 0 / 5.
+  for (const [draw, expected] of [[0, -5], [0.5, 0], [0.999, 5]]) {
     const { match } = setup({ rng: () => draw });
     assert.strictEqual(match.wind, expected, 'rng ' + draw + ' -> wind ' + expected);
   }
+  // Uniformity: one draw inside each of the 11 equal-probability bins
+  // covers every value of -5..+5 exactly once. (The superseded round
+  // formula tipped the 0.05 edge draw to -4 — its ±5 bins were half as
+  // likely as the inner ones, the exact defect R12 removes.)
+  const seen = [];
+  for (const draw of [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95]) {
+    const { match } = setup({ rng: () => draw });
+    seen.push(match.wind);
+  }
+  assert.deepStrictEqual(seen, [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]);
 });
 
 test('flow: AIM --fire--> FLIGHT --land--> RESOLVE --next--> AIM with side/wind/round advanced', () => {

@@ -19,8 +19,10 @@
    *   x += vx*dt; y += vy*dt; vy += G*dt; vx += WIND_K*wind*dt
    * Positive angleDeg launches upward (screen y grows downward); wind > 0
    * pushes toward +x. points[0] is the launch point, then one sample per
-   * step; the first position with y >= IMPACT_Y is recorded as impact and
-   * ends the flight (impact is null only if MAX_STEPS is ever exhausted).
+   * step. The flight ends at the first step reaching y >= IMPACT_Y; impact
+   * is the exact crossing of that stop line, interpolated on the final
+   * step, so impact x varies continuously with power (solvePower relies on
+   * that). impact is null only if MAX_STEPS is ever exhausted.
    */
   function simulate(x0, y0, angleDeg, power, wind) {
     var rad = angleDeg * Math.PI / 180;
@@ -32,13 +34,18 @@
     var points = [{ x: x, y: y }];
     var impact = null;
     for (var i = 0; i < MAX_STEPS; i++) {
+      var px = x;
+      var py = y;
       x += vx * DT;
       y += vy * DT;
       vy += G * DT;
       vx += WIND_K * wind * DT;
       points.push({ x: x, y: y });
       if (y >= IMPACT_Y) {
-        impact = { x: x, y: y };
+        var span = y - py;
+        var f = span > 0 ? (IMPACT_Y - py) / span : 0;
+        if (f < 0) { f = 0; } // launched at/below the stop line: impact at launch
+        impact = { x: px + (x - px) * f, y: py + (y - py) * f };
         break;
       }
     }
@@ -47,17 +54,20 @@
 
   /**
    * solvePower(x0, y0, xTarget, angleDeg, wind) -> power|null
-   * Binary-searches power in [0, 100] for an impact landing within 2px of
-   * xTarget. Impact x is monotonic in power (upward jumps included), so a
-   * sign-based bisection works for left- and right-facing angles alike.
-   * Returns null when the target lies outside the reachable span or inside
-   * a discretization gap no power can hit.
+   * Binary-searches continuous float power in [0, 100] for an impact
+   * landing within 2px of xTarget, converging the bisection to ~1e-9 px.
+   * Impact x is continuous and increasing in power (the crossing is
+   * interpolated sub-step), so a sign-based bisection converges for every
+   * reachable target, left- and right-facing angles alike. Returns null
+   * only for genuinely unreachable targets (beyond max range / behind the
+   * muzzle). Power is quantized to integers only at the UI layer, never
+   * here.
    */
   function solvePower(x0, y0, xTarget, angleDeg, wind) {
     var LO = 0;
     var HI = 100;
     var TOL = 2;     // px — "lands within 2px of the target"
-    var ITERS = 40;  // 100 / 2^40 is far below any useful resolution
+    var ITERS = 40;  // 100 / 2^40 of the span: converges far below 1px
 
     function miss(power) {
       var land = simulate(x0, y0, angleDeg, power, wind).impact;
@@ -73,11 +83,9 @@
     if ((fLo < 0) === (fHi < 0)) { return null; } // target outside the reachable span
     for (var i = 0; i < ITERS; i++) {
       var mid = (lo + hi) / 2;
-      var fMid = miss(mid);
-      if (Math.abs(fMid) < TOL) { return mid; }
-      if ((fMid < 0) === (fLo < 0)) { lo = mid; } else { hi = mid; }
+      if ((miss(mid) < 0) === (fLo < 0)) { lo = mid; } else { hi = mid; }
     }
-    return null; // bracketed but no power lands within TOL
+    return (lo + hi) / 2; // continuous impact x: converged onto the target
   }
 
   CC.Ballistics = { simulate: simulate, solvePower: solvePower };

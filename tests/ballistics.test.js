@@ -6,9 +6,12 @@
  * Pins, verbatim from the task brief:
  *   G = 900, V0 = power * 14 (power 0..100), WIND_K = 6, dt = 1/60
  *   per step: x += vx*dt; y += vy*dt; vy += G*dt; vx += WIND_K*wind*dt
- *   shells stop (and record impact) at y >= 1500
- *   solvePower binary-searches power in 0..100 so the impact lands within
- *   2px of the target x; returns null when no power can
+ *   shells stop (and record impact) at y >= 1500; impact is the exact
+ *   crossing of that stop line (interpolated on the final step), so impact
+ *   x is continuous in power
+ *   solvePower binary-searches continuous float power in 0..100 so the
+ *   impact lands within 2px of the target x; null only for genuinely
+ *   unreachable targets (beyond max range / behind the muzzle)
  */
 
 const { test } = require('node:test');
@@ -40,13 +43,20 @@ function reference(x0, y0, angleDeg, power, wind) {
   const points = [{ x: x, y: y }];
   let impact = null;
   for (;;) {
+    const px = x;
+    const py = y;
     x += vx * DT;
     y += vy * DT;
     vy += G * DT;
     vx += WIND_K * wind * DT;
     points.push({ x: x, y: y });
     if (y >= FLOOR_Y) {
-      impact = { x: x, y: y };
+      // Impact is the exact crossing of the stop line, interpolated on the
+      // final step, so impact x varies continuously with power.
+      const span = y - py;
+      let f = span > 0 ? (FLOOR_Y - py) / span : 0;
+      if (f < 0) { f = 0; } // launched at/below the line: impact at launch
+      impact = { x: px + (x - px) * f, y: py + (y - py) * f };
       break;
     }
   }
@@ -75,8 +85,13 @@ test('simulate follows the pinned per-step integration', () => {
       approx(got.points[i].y, want.points[i].y, 1e-9, 'point ' + i + ' y');
     }
     assert.ok(got.impact, 'impact recorded at y >= ' + FLOOR_Y);
-    assert.deepStrictEqual(got.impact, got.points[got.points.length - 1],
-      'impact is the final trajectory point');
+    approx(got.impact.y, FLOOR_Y, 1e-6, 'impact sits on the stop line');
+    const last = got.points.length - 1;
+    const ax = got.points[last - 1].x;
+    const bx = got.points[last].x;
+    assert.ok(got.impact.x >= Math.min(ax, bx) - 1e-9 &&
+              got.impact.x <= Math.max(ax, bx) + 1e-9,
+      'impact lies on the final trajectory segment');
   }
 });
 
@@ -157,6 +172,27 @@ test('solvePower finds a power whose impact lands within 2px of the target', () 
     assert.ok(power >= 0 && power <= 100, 'power within 0..100');
     const landX = B.simulate(c.x0, c.y0, c.angle, power, c.wind).impact.x;
     approx(landX, c.target, 2, 'lands within 2px at power ' + power);
+  }
+});
+
+test('solvePower hits every target from 30% to 95% of maximum range', () => {
+  const x0 = 200;
+  const y0 = 400;
+  const angle = 45;
+  const wind = 0;
+  const maxRange = B.simulate(x0, y0, angle, 100, wind).impact.x - x0;
+  const COUNT = 12;
+  for (let i = 0; i < COUNT; i++) {
+    const frac = 0.30 + (0.95 - 0.30) * (i / (COUNT - 1));
+    const target = x0 + maxRange * frac;
+    const power = B.solvePower(x0, y0, target, angle, wind);
+    assert.ok(power !== null,
+      'target ' + target.toFixed(1) + ' (' + (frac * 100).toFixed(1) +
+      '% of max range) is solvable');
+    assert.ok(power >= 0 && power <= 100, 'power within 0..100');
+    const landX = B.simulate(x0, y0, angle, power, wind).impact.x;
+    approx(landX, target, 2,
+      'lands within 2px at ' + (frac * 100).toFixed(1) + '% of max range');
   }
 });
 

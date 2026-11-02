@@ -13,20 +13,31 @@
   var IMPACT_Y = 1500;    // shells stop (and land) at y >= this, below the 900px viewport
   var MAX_STEPS = 3600;   // termination guard: 60 simulated seconds, unreachable in play
 
+  // Per-weapon wind susceptibility (multiplier on WIND_K): the heavy
+  // shell punches through crosswind (0.6), the pierce round is light and
+  // Drifts MORE (1.2). The AI's terrain solver bisects power through the
+  // same simulate() — the perfect solution absorbs the coefficients
+  // automatically. Weapons absent from the table (and lob() bomblets)
+  // take the full 1.0.
+  var WEAPON_WIND_K = { normal: 1, heavy: 0.6, pierce: 1.2, cluster: 1 };
+
   /**
-   * simulate(x0, y0, angleDeg, power, wind) -> {points, impact}
+   * simulate(x0, y0, angleDeg, power, wind, weapon) -> {points, impact}
    * Integrates one shell flight in fixed DT steps:
    *   x += vx*dt; y += vy*dt; vy += G*dt; vx += WIND_K*wind*dt
-   * Positive angleDeg launches upward (screen y grows downward); wind > 0
-   * pushes toward +x. points[0] is the launch point, then one sample per
-   * step. The flight ends at the first step reaching y >= IMPACT_Y; impact
-   * is the exact crossing of that stop line, interpolated on the final
-   * step, so impact x varies continuously with power (solvePower relies on
-   * that). impact is null only if MAX_STEPS is ever exhausted.
+   * `weapon` scales the wind acceleration by WEAPON_WIND_K (default
+   * normal/1.0). Positive angleDeg launches upward (screen y grows
+   * downward); wind > 0 pushes toward +x. points[0] is the launch point,
+   * then one sample per step. The flight ends at the first step reaching
+   * y >= IMPACT_Y; impact is the exact crossing of that stop line,
+   * interpolated on the final step, so impact x varies continuously with
+   * power (solvePower relies on that). impact is null only if MAX_STEPS
+   * is ever exhausted.
    */
-  function simulate(x0, y0, angleDeg, power, wind) {
+  function simulate(x0, y0, angleDeg, power, wind, weapon) {
     var rad = angleDeg * Math.PI / 180;
     var v0 = power * V0_PER_POWER;
+    var wk = WIND_K * (WEAPON_WIND_K[weapon] || 1);
     var x = x0;
     var y = y0;
     var vx = v0 * Math.cos(rad);
@@ -39,7 +50,7 @@
       x += vx * DT;
       y += vy * DT;
       vy += G * DT;
-      vx += WIND_K * wind * DT;
+      vx += wk * wind * DT;
       points.push({ x: x, y: y });
       if (y >= IMPACT_Y) {
         var span = y - py;
@@ -155,7 +166,13 @@
     return { points: points, impact: impact };
   }
 
-  CC.Ballistics = { simulate: simulate, solvePower: solvePower, chargePower: chargePower, lob: lob };
+  CC.Ballistics = {
+    simulate: simulate,
+    solvePower: solvePower,
+    chargePower: chargePower,
+    lob: lob,
+    WEAPON_WIND_K: WEAPON_WIND_K
+  };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

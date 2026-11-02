@@ -102,17 +102,23 @@
   }
 
   /**
-   * crater(ctx, imgs, x, y) — scorch decal centered on the impact point,
-   * 11% of the canvas wide (176px at the 1600 field), sunk 10% of its height
-   * so the ellipse straddles the terrain surface line. Persistent: the scene
-   * keeps its own crater list and calls this every frame for each one.
+   * crater(ctx, imgs, x, y, alpha) — scorch decal centered on the impact
+   * point, 11% of the canvas wide (176px at the 1600 field), sunk 10% of
+   * its height so the ellipse straddles the terrain surface line.
+   * Persistent: the scene keeps its own crater list and calls this every
+   * frame for each one. alpha (default 1) tints it down — with real
+   * carve holes in the heightfield the decal is now a scorch MARK, not
+   * the hole itself.
    */
-  function crater(ctx, imgs, x, y) {
+  function crater(ctx, imgs, x, y, alpha) {
     var img = imgs[CRATER_KEY];
     if (!img) { return; }
     var w = ctx.canvas.width * CRATER_WIDTH;
     var h = w * img.height / img.width;
+    ctx.save();
+    if (alpha !== undefined && alpha < 1) { ctx.globalAlpha = alpha; }
     ctx.drawImage(img, x - w / 2, y - h / 2 + h * 0.1, w, h);
+    ctx.restore();
   }
 
   /**

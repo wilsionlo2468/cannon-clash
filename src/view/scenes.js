@@ -259,6 +259,7 @@
       recoil: { P1: 0, P2: 0 }, // seconds of barrel kick left, per side
       dmgPops: [],         // [{x, y, text, t0}] damage numbers
       hitFlashes: [],      // [{x, y, t0}] white bursts on struck cannons
+      childFlights: [],    // cluster bomblet replays {points, impact, by, startT, done}
       // AI turn state
       ai: null,        // {phase:'wait', at} | {phase:'tween', from, to, power, t0}
       over: false
@@ -290,7 +291,7 @@
     function launchFlight(snap) {
       var c = sideCannon(snap.side);
       var m = CC.Cannon.muzzle(c);
-      var sim = CC.Ballistics.simulate(m.x, m.y, snap.side === 'P2' ? 180 - c.angle : c.angle, c.power, match.wind);
+      var sim = CC.Ballistics.simulate(m.x, m.y, snap.side === 'P2' ? 180 - c.angle : c.angle, c.power, match.wind, snap.weapon);
       var points = sim.points;
       var impact = null;
       for (var i = 1; i < points.length; i++) {
@@ -339,6 +340,23 @@
           var hc = last.hits[hi].cannon;
           b.dmgPops.push({ x: hc.x, y: hc.y - 74, text: '-' + last.hits[hi].dmg, t0: S.t });
           b.hitFlashes.push({ x: hc.x, y: hc.y, t0: S.t });
+        }
+        // cluster bomblets: replay each child's REAL flight (core-computed
+        // lobs) staggered through the resolve pause; extra pause time so
+        // the fan-out reads before the next turn begins
+        if (last.lobs && last.lobs.length) {
+          var stagger = 0.16;
+          for (var li = 0; li < last.lobs.length; li++) {
+            b.childFlights.push({
+              points: last.lobs[li].points,
+              impact: last.lobs[li].impact,
+              by: by,
+              startT: S.t + 0.12 + li * stagger,
+              done: false
+            });
+          }
+          b.resolveAt = S.t + RESOLVE_PAUSE + 0.12 + last.lobs.length * stagger + 0.5;
+          return;
         }
       }
       b.resolveAt = S.t + RESOLVE_PAUSE;
@@ -504,6 +522,20 @@
       // flight landing
       if (b.flight && S.t - b.flight.t0 >= b.flight.dur) { land(); }
 
+      // cluster bomblet replays: each child detonates (blast + thump)
+      // when its replayed flight reaches its core-computed landing
+      for (var ci = b.childFlights.length - 1; ci >= 0; ci--) {
+        var cf = b.childFlights[ci];
+        if (S.t < cf.startT) { continue; }
+        var cdur = (cf.points.length - 1) * STEP;
+        if (S.t - cf.startT >= cdur) {
+          b.blasts.push({ x: cf.impact.x, y: cf.impact.y, t0: S.t });
+          b.cam.kick(0.3);
+          CC.Audio.play('explosion');
+          b.childFlights.splice(ci, 1);
+        }
+      }
+
       // resolve pause -> next(); a fresh round rolls the supply crate
       if (match.state === 'RESOLVE' && S.t >= b.resolveAt) {
         var r = match.next();
@@ -554,9 +586,9 @@
       ctx.clearRect(0, 0, W, H);
       ctx.save();
       b.cam.apply(ctx);
-      CC.Layers.draw(ctx, imgs, S.t);
+      CC.Layers.draw(ctx, imgs, S.t, { deform: true }); // terrain cut by the live heightfield
       for (i = 0; i < b.craters.length; i++) {
-        CC.Effects.crater(ctx, imgs, b.craters[i].x, b.craters[i].y);
+        CC.Effects.crater(ctx, imgs, b.craters[i].x, b.craters[i].y, 0.35); // scorch mark
       }
       // supply crate: truthy check — undefined before the first roll,
       // null after a pickup (seam note; HUD handles it the same way)
@@ -584,6 +616,19 @@
       }
       for (i = 0; i < b.blasts.length; i++) {
         CC.Effects.explosion(ctx, imgs, b.blasts[i].x, b.blasts[i].y, S.t - b.blasts[i].t0);
+      }
+      // cluster bomblets replaying their real flights
+      for (i = 0; i < b.childFlights.length; i++) {
+        var cf2 = b.childFlights[i];
+        if (S.t < cf2.startT) { continue; }
+        var cidx = clamp(Math.floor((S.t - cf2.startT) / STEP), 0, cf2.points.length - 1);
+        var ca = cf2.points[Math.max(0, cidx - 1)];
+        var cc = cf2.points[Math.min(cf2.points.length - 1, cidx + 1)];
+        CC.Effects.flightTrail(ctx, cf2.points, cidx, SIDE_COLOR[cf2.by]);
+        CC.Sprites.drawShell(ctx, imgs, {
+          x: cf2.points[cidx].x, y: cf2.points[cidx].y, type: 'cluster',
+          angle: Math.atan2(cc.y - ca.y, cc.x - ca.x)
+        });
       }
       // muzzle flash (self-drawn, retires after MUZZLE_FLASH_TIME)
       for (i = b.flashes.length - 1; i >= 0; i--) {

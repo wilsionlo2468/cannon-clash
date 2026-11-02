@@ -10,7 +10,6 @@
   var CC = (root.CC = root.CC || {});
 
   // Pinned view-side timings (task-11 brief / seam notes).
-  var CHARGE_TIME = 1.6;        // s, power 0 -> 100
   var RESOLVE_PAUSE = 1.2;      // s, view-timed (core builds none in)
   var AI_THINK_DELAY = CC.AI.THINK_DELAY; // 1.2s pinned by core
   var AI_TWEEN_TIME = 0.8;      // s, barrel tween to the AI angle
@@ -23,7 +22,20 @@
 
   var ANGLE_RATE = 40;   // deg/s, pinned by the brief
   var ANGLE_MAX = 85;
+  var MOVE_RATE = 140;   // px/s while a walk key is held (budget 160 -> ~1.1s)
   var CRATE_W = 48;      // display width of the supply crate
+  var BANNER_TIME = 1;   // s the turn banner shows
+
+  // Unified controls (both clusters drive whichever side holds the turn):
+  //   A/D or ←/→  walk (AIM only, per-turn budget)
+  //   W/S or ↑/↓  elevation
+  //   SPACE hold→release  charge & fire (ping-pong curve, release = power)
+  //   Q/E or Tab  cycle weapon (E/Tab forward, Q back)
+  //   M mute / F fullscreen / ESC title — global
+
+  function nowMs() {
+    return (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  }
 
   var MENU_BG = 'rgba(10, 12, 18, 0.55)';
   var MENU_HI = '#ffdf8a';
@@ -31,6 +43,7 @@
   var FONT_TITLE = 'bold 44px sans-serif';
   var FONT_ITEM = '26px sans-serif';
   var FONT_HINT = '16px sans-serif';
+  var FONT_BANNER = 'bold 40px sans-serif';
 
   var S = {
     ctx: null,
@@ -231,6 +244,11 @@
       resolveAt: 0,
       lastBeepSec: -1,
       wantFire: false,
+      chargeActive: false, // Space held and a charge is running
+      chargeT: 0,          // charge duration in GAME time (exact release power)
+      lastFrameMs: nowMs(),// wall-clock stamp of the last fixed step
+      lastTurn: null,      // turn-banner tracking
+      banner: null,        // {text, t0} — shown BANNER_TIME s at each turn start
       // AI turn state
       ai: null,        // {phase:'wait', at} | {phase:'tween', from, to, power, t0}
       over: false
@@ -238,6 +256,13 @@
 
     function sideCannon(side) { return side === 'P2' ? p2 : p1; }
     function isAiTurn() { return mode === 'ai' && match.turn === 'P2'; }
+
+    function cycleWeapon(c, dir) {
+      var keys = Object.keys(CC.Weapons.LIST);
+      var i = keys.indexOf(c.weapon);
+      c.weapon = keys[(i + dir + keys.length) % keys.length];
+      CC.Audio.play('click');
+    }
 
     // Snapshot the shooter's selection BEFORE fire so the flown shell type
     // is known even when the clock's auto-fire (inside match.tick) fires.
@@ -337,23 +362,34 @@
       if (match.state !== 'AIM' && match.state !== 'CHARGE' && match.state !== 'SUDDEN') { return; }
       if (!human[match.turn]) { return; } // AI's move
       var c = sideCannon(match.turn);
-      if (key === 'w' || key === 'ArrowUp') {
-        var keys = Object.keys(CC.Weapons.LIST);
-        c.weapon = keys[(keys.indexOf(c.weapon) + 1) % keys.length];
-        CC.Audio.play('click');
+      if (key === 'e' || key === 'Tab') {
+        if (key === 'Tab' && e) { e.preventDefault(); }
+        cycleWeapon(c, 1);
         return;
       }
-      if (key === 's' || key === 'ArrowDown') {
+      if (key === 'q') { cycleWeapon(c, -1); return; }
+      if (key === ' ') {
         if (match.state === 'AIM') {
-          if (match.startCharge()) { CC.Audio.chargeStart(); }
+          if (match.startCharge()) { // resets power to 0 (the ping-pong curve starts here)
+            b.chargeT = 0; // the charge clock runs on GAME time (update-accumulated)
+            b.chargeActive = true;
+            CC.Audio.chargeStart();
+          }
         } else if (match.state === 'SUDDEN' && !e.repeat) {
-          b.wantFire = true; // no charging in sudden death: fire straight
+          b.wantFire = true; // no charging in sudden death: fire straight (core pins 65)
         }
       }
+      // w/s/arrows/a/d: polled per-frame in update (held keys), nothing here
     };
 
     b.keyUp = function (key) {
-      if ((key === 's' || key === 'ArrowDown') && match.state === 'CHARGE' && human[match.turn]) {
+      if (key === ' ' && b.chargeActive && match.state === 'CHARGE' && human[match.turn]) {
+        // the release power is the charge curve at the EXACT held duration:
+        // the game-time total plus the wall-clock fraction elapsed since the
+        // last fixed step — release timing carries no frame quantization
+        b.chargeT += (nowMs() - b.lastFrameMs) / 1000;
+        sideCannon(match.turn).power = CC.Ballistics.chargePower(b.chargeT);
+        b.chargeActive = false;
         CC.Audio.chargeStop();
         b.wantFire = true; // release fires with the charged power kept
       }
@@ -363,20 +399,28 @@
       var st = match.state;
       var charging = st === 'CHARGE';
 
-      // human aim: A/D (active side P1) or arrows (P2), 40 deg/s, 0..85
+      // human controls: both key clusters drive whichever side holds the
+      // turn (unified mapping — no more per-side key sets)
       if ((st === 'AIM' || charging || st === 'SUDDEN') && human[match.turn]) {
         var c = sideCannon(match.turn);
-        var dir = 0;
-        if (match.turn === 'P1') {
-          dir = (S.input.isDown('d') ? 1 : 0) - (S.input.isDown('a') ? 1 : 0);
-        } else {
-          dir = (S.input.isDown('ArrowRight') ? 1 : 0) - (S.input.isDown('ArrowLeft') ? 1 : 0);
+        // elevation: W/S or up/down, 40 deg/s, 0..85 (aimable mid-charge)
+        var adir = (S.input.isDown('w') || S.input.isDown('ArrowUp') ? 1 : 0) -
+                   (S.input.isDown('s') || S.input.isDown('ArrowDown') ? 1 : 0);
+        if (adir) { c.angle = clamp(c.angle + adir * ANGLE_RATE * dt, 0, ANGLE_MAX); }
+        // walking: A/D or left/right, AIM only, spent from the budget
+        if (st === 'AIM') {
+          var mdir = (S.input.isDown('d') || S.input.isDown('ArrowRight') ? 1 : 0) -
+                     (S.input.isDown('a') || S.input.isDown('ArrowLeft') ? 1 : 0);
+          if (mdir) { match.move(mdir * MOVE_RATE * dt); }
         }
-        if (dir) { c.angle = clamp(c.angle + dir * ANGLE_RATE * dt, 0, ANGLE_MAX); }
-        if (charging) {
-          c.power = clamp(c.power + (100 / CHARGE_TIME) * dt, 0, 100);
+        // charge: the ping-pong curve evaluated at the accumulated game time
+        if (charging && b.chargeActive) {
+          b.chargeT += dt;
+          c.power = CC.Ballistics.chargePower(b.chargeT);
         }
       }
+      if (st !== 'CHARGE') { b.chargeActive = false; }
+      b.lastFrameMs = nowMs(); // keyup adds the wall-clock residual to chargeT
 
       // AI turn: 1.2s think delay, then a 0.8s barrel tween, then fire.
       if (isAiTurn() && (st === 'AIM' || st === 'SUDDEN')) {
@@ -443,6 +487,13 @@
         }
       }
 
+      // turn banner: every fresh AIM turn announces its holder for 1s
+      if (match.state === 'AIM' && match.turn !== b.lastTurn) {
+        b.lastTurn = match.turn;
+        var who = match.turn === 'P1' ? NAMES.p1 : NAMES.p2;
+        b.banner = { text: (match.turn === 'P1' ? 'P1 ' : 'P2 ') + who + ' 回合', t0: S.t };
+      }
+
       // timer warning beeps (last 5s of AIM/CHARGE, one pair per second)
       if ((match.state === 'AIM' || match.state === 'CHARGE') && match.timer <= TIMER_WARN_S && match.timer > 0) {
         var sec = Math.ceil(match.timer);
@@ -500,13 +551,26 @@
         ctx.restore();
       }
       if (b.trail) { CC.Effects.lastShot(ctx, b.trail.points, b.trail.impact); }
-      CC.HUD.draw(ctx, imgs, match, S.t);
+      // charge info for the power bar: game-time held -> descending leg
+      var charge = null;
+      if (match.state === 'CHARGE' && b.chargeActive) {
+        charge = { elapsed: b.chargeT, descending: (b.chargeT % 3.8) > 1.9 };
+      }
+      CC.HUD.draw(ctx, imgs, match, S.t, charge);
       // status hint under the weapon line
       var hint = '';
       if (b.flight) { hint = ''; }
       else if (isAiTurn()) { hint = b.ai && b.ai.phase === 'tween' ? 'AI 調整砲管…' : 'AI 思考中…'; }
-      else if (human[match.turn]) { hint = match.turn === 'P1' ? 'P1 ' + NAMES.p1 + '：A/D 仰角 W 武器 S 蓄力發射' : 'P2 ' + NAMES.p2 + '：←/→ 仰角 ↑ 武器 ↓ 蓄力發射'; }
+      else if (human[match.turn]) { hint = 'A/D 走位 · W/S 仰角 · Q/E 換彈 · 長按空白蓄力，放開發射'; }
       if (hint) { label(ctx, hint, ctx.canvas.width / 2, 160, FONT_HINT, MENU_HI); }
+
+      // turn banner (1s, fades at both ends; only while still aiming)
+      if (b.banner && match.state === 'AIM' && S.t - b.banner.t0 < BANNER_TIME) {
+        var bp = (S.t - b.banner.t0) / BANNER_TIME;
+        var alpha = bp < 0.15 ? bp / 0.15 : bp > 0.75 ? (1 - bp) / 0.25 : 1;
+        label(ctx, b.banner.text, ctx.canvas.width / 2, 300, FONT_BANNER,
+          'rgba(255, 223, 138, ' + clamp(alpha, 0, 1).toFixed(3) + ')');
+      }
     };
 
     return b;

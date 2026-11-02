@@ -46,20 +46,39 @@
   var G_NEEDLE_L = 124;             // code needle length (art px, = baked blade reach)
   var G_NEEDLE_HW = 17;             // code needle base half-width (art px)
   var G_HUB_R = 30;                 // hub cap radius (art px)
-  var G_ARC_R = 184;                // power arc radius (art px)
-  var G_ARC_W = 10;                 // power arc stroke width (display px)
-  var G_MAX_SWEEP = 90;             // power 100 -> 90 degrees of arc
   var G_BOTTOM_PAD = 7;             // art content bottom (y=372) above the screen bottom
   // The art's decorative "000" power screen (right of the hub, keyed out
   // like the face) is restored as a live readout of the current power.
   var G_SCREEN = { dx: 79, dy: -13, w: 56, h: 26 }; // art px, hub-relative
 
   // ---------------------------------------------------------------- *
+  // Power bar (code-drawn, DDTank-style): a horizontal 0..100 strip above
+  // the gauge. Replaces the dial's old power arc — the dial now reads
+  // ELEVATION only. Shows tick marks, the live %, the descent arrow while
+  // the ping-pong curve is falling, and each side's last-fired power as a
+  // player-colored notch — the memory anchor for the "last shot 65, try
+  // 70" correction loop.
+  var PB_W = 480;
+  var PB_H = 22;
+  var PB_Y = 655;      // top of the power bar (gauge art tops out at ~688)
+  var MB_H = 7;        // move-budget bar height, sits just above
+  var MB_GAP = 5;
+
+  // Last-shot notch colors per side (matches the shell trail colors).
+  var COLOR_P1 = '#ff9a3d';
+  var COLOR_P2 = '#4fc3ff';
+  var COLOR_FILL_HI = '#ffb347';
+  var COLOR_FILL_LO = '#ff5e3a';
+  var COLOR_TICK = 'rgba(240, 240, 245, 0.55)';
+  var COLOR_TRACK2 = 'rgba(14, 10, 12, 0.85)';
+
+  // ---------------------------------------------------------------- *
   // Top-centre strip (timer / wind / round) and per-side weapon lines are
-  // plain canvas text: wind art is missing (placeholder per the plan),
-  // the timer warns red during the last WARN_S seconds, and SUDDEN death
-  // replaces the timer with a fixed notice (in SUDDEN the core's timer is
-  // a never-ticking full clock — reading it there would lie).
+  // plain canvas text: wind is drawn as chevrons + number (the wind art
+  // never landed — code drawing removed that dependency), the timer warns
+  // red during the last WARN_S seconds, and SUDDEN death replaces the
+  // timer with a fixed notice (in SUDDEN the core's timer is a
+  // never-ticking full clock — reading it there would lie).
   var WARN_S = 5;
   var TIMER_Y = 48;
   var WIND_Y = 82;
@@ -70,10 +89,11 @@
   var FONT_WIND = 'bold 24px sans-serif';
   var FONT_ROUND = '18px sans-serif';
   var FONT_WEAPON = 'bold 22px sans-serif';
+  var FONT_BAR = 'bold 15px sans-serif';
 
   var COLOR_TIMER = '#f2f4f7';
   var COLOR_WARN = '#ff4b3e';
-  var COLOR_WIND = '#e8ecf2';
+  var COLOR_WIND = '#9fd8ff';
   var COLOR_ROUND = '#c9cfd8';
   var COLOR_WEAPON_ACTIVE = '#ffdf8a';
   var COLOR_WEAPON_IDLE = '#aeb6c2';
@@ -108,11 +128,37 @@
   }
 
   // 「風 ◀◀/▶▶ n」 — arrows point the way the wind blows the shell
-  // (negative wind pushes toward -x). Placeholder until wind art lands.
+  // (negative wind pushes toward -x). Kept for the node test hook; the
+  // draw path uses chevrons (drawWind below).
   function windText(wind) {
     if (wind < 0) { return '風 ◀◀ ' + (-wind); }
     if (wind > 0) { return '風 ▶▶ ' + wind; }
     return '風 0';
+  }
+
+  // Wind as |wind| chevrons blowing in its direction + the number. A
+  // chevron is a wide ">" (mirrored for -x); zero draws just 「風 0」.
+  function drawWind(ctx, wind, cx, y) {
+    var n = Math.abs(wind);
+    label(ctx, '風', cx - (n > 0 ? 74 : 14), y, FONT_WIND, COLOR_WIND);
+    if (n <= 0) { return; }
+    var dir = wind > 0 ? 1 : -1;
+    var gap = 26;
+    ctx.save();
+    ctx.strokeStyle = COLOR_WIND;
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    for (var i = 0; i < n; i++) {
+      var x = cx + dir * (i * gap - (n - 1) * gap / 2);
+      ctx.beginPath();
+      ctx.moveTo(x - dir * 7, y - 11);
+      ctx.lineTo(x + dir * 6, y - 4);
+      ctx.lineTo(x - dir * 7, y + 3);
+      ctx.stroke();
+    }
+    ctx.restore();
+    label(ctx, String(n), cx + dir * ((n - 1) * gap / 2 + 26), y, FONT_WIND, COLOR_WIND);
   }
 
   // Outline text: dark stroke keeps the strip readable over sky and terrain.
@@ -172,14 +218,14 @@
   }
 
   /**
-   * drawGauge(ctx, img, angleDeg, power, charging) — bottom-centre dial.
+   * drawGauge(ctx, img, angleDeg, charging) — bottom-centre dial.
    * needle angle = current elevation in degrees (0 = horizontal right,
-   * 85 = near vertical, matching the baked art needle's 45-degree rest);
-   * while charging, a power arc sweeps the printed colour band
-   * (power 0..100 -> 0..90 degrees) beside a live digital readout in the
-   * art's "000" slot. img may be null: the dial body is code-drawn.
+   * 85 = near vertical, matching the baked art needle's 45-degree rest).
+   * The art's "000" slot is a live ELEVATION readout — power moved to the
+   * dedicated power bar, so the dial reads one thing plainly. img may be
+   * null: the dial body is code-drawn.
    */
-  function drawGauge(ctx, img, angleDeg, power, charging) {
+  function drawGauge(ctx, img, angleDeg, charging) {
     var s = GAUGE_S;
     var px = ctx.canvas.width / 2;
     var py = ctx.canvas.height - G_BOTTOM_PAD - (372 - G_PIVOT.y) * s;
@@ -206,8 +252,8 @@
     ctx.strokeStyle = 'rgba(40, 34, 28, 0.9)';
     ctx.stroke();
 
-    // digital power readout in the art's "000" slot — under the needle, so
-    // the blade passes over it like over the dial face at low elevations
+    // digital ELEVATION readout in the art's "000" slot — under the
+    // needle, so the blade passes over it like over the dial face
     var scr = G_SCREEN;
     ctx.fillStyle = 'rgba(12, 16, 22, 0.85)';
     ctx.fillRect(px + (scr.dx - scr.w / 2) * s, py + (scr.dy - scr.h / 2) * s, scr.w * s, scr.h * s);
@@ -215,7 +261,7 @@
     ctx.font = 'bold 14px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(Math.round(power > 0 ? power : 0)), px + scr.dx * s, py + scr.dy * s);
+    ctx.fillText(Math.round(angleDeg > 0 ? angleDeg : 0) + '°', px + scr.dx * s, py + scr.dy * s);
 
     // live needle = current elevation (clamped to the core's 0..85 range)
     var a = Math.max(0, Math.min(85, angleDeg > 0 ? angleDeg : 0)) * Math.PI / 180;
@@ -244,31 +290,106 @@
     ctx.fillStyle = '#6c6355';
     ctx.fill();
 
-    // power arc while charging, riding the printed colour band
-    if (charging) {
-      var sweep = clamp01((power > 0 ? power : 0) / 100) * G_MAX_SWEEP * Math.PI / 180;
-      ctx.beginPath();
-      ctx.arc(px, py, G_ARC_R * s, -sweep, 0);
-      ctx.lineWidth = G_ARC_W;
-      ctx.strokeStyle = 'rgba(255, 148, 50, 0.95)';
-      ctx.stroke();
-    }
     ctx.restore();
   }
 
   /**
-   * draw(ctx, imgs, match, t) — the full HUD. match is a CC.Match (or a
-   * stand-in exposing the fields read here: p1/p2 {hp, angle, power,
-   * weapon, ammo}, turn, round, wind, timer, state). t is the logical
-   * time in seconds driving the warning flash; defaults to wall clock.
+   * drawPowerBar(ctx, match, charging, descending) — the horizontal
+   * 0..100 strip: ticks at 0/25/50/75/100, the live fill + % readout, a
+   * ▼/▲ while the charge curve is falling, and each side's last-fired
+   * power as a persistent player-colored notch (the correction-loop
+   * anchor). While not charging the bar idles at the active side's
+   * current power.
+   */
+  function drawPowerBar(ctx, match, charging, descending) {
+    var W = ctx.canvas.width;
+    var x = (W - PB_W) / 2;
+    var active = sideOf(match, match.turn);
+    var p = charging ? (active.power > 0 ? active.power : 0) : (active.power > 0 ? active.power : 0);
+
+    ctx.save();
+    // track + fill
+    ctx.fillStyle = COLOR_TRACK2;
+    ctx.fillRect(x - 3, PB_Y - 3, PB_W + 6, PB_H + 6);
+    if (p > 0) {
+      var grad = ctx.createLinearGradient(x, 0, x + PB_W, 0);
+      grad.addColorStop(0, COLOR_FILL_LO);
+      grad.addColorStop(1, COLOR_FILL_HI);
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, PB_Y, PB_W * clamp01(p / 100), PB_H);
+    }
+    // ticks + numerals
+    ctx.strokeStyle = COLOR_TICK;
+    ctx.lineWidth = 1;
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = COLOR_TICK;
+    for (var v = 0; v <= 100; v += 25) {
+      var tx = x + PB_W * v / 100;
+      ctx.beginPath();
+      ctx.moveTo(tx, PB_Y);
+      ctx.lineTo(tx, PB_Y + PB_H);
+      ctx.stroke();
+      ctx.fillText(String(v), tx, PB_Y + PB_H + 3);
+    }
+    // last-fired notches: both sides, always visible
+    for (var side in { P1: 1, P2: 1 }) {
+      var c = side === 'P1' ? match.p1 : match.p2;
+      if (!c || !(c.lastPower >= 0)) { continue; }
+      var nx = x + PB_W * clamp01(c.lastPower / 100);
+      ctx.strokeStyle = side === 'P1' ? COLOR_P1 : COLOR_P2;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(nx, PB_Y - 6);
+      ctx.lineTo(nx, PB_Y + PB_H + 2);
+      ctx.stroke();
+    }
+    // % readout + descent arrow
+    var pct = String(Math.round(p)) + '%' + (charging ? (descending ? ' ▼' : ' ▲') : '');
+    label(ctx, pct, W / 2, PB_Y - 6, FONT_BAR, charging ? '#ffe2ae' : '#c9cfd8');
+    ctx.restore();
+  }
+
+  /**
+   * drawMoveBar(ctx, match) — the active side's remaining walking budget
+   * as a thin strip right above the power bar. AIM only (walking is).
+   */
+  function drawMoveBar(ctx, match) {
+    if (match.state !== 'AIM') { return; }
+    var W = ctx.canvas.width;
+    var x = (W - PB_W) / 2;
+    var active = sideOf(match, match.turn);
+    var range = (CC.Cannon && CC.Cannon.MOVE_RANGE) || 160;
+    var frac = clamp01((active.moveBudget > 0 ? active.moveBudget : 0) / range);
+    var y = PB_Y - MB_GAP - MB_H;
+    ctx.save();
+    ctx.fillStyle = COLOR_TRACK2;
+    ctx.fillRect(x, y, PB_W, MB_H);
+    if (frac > 0) {
+      ctx.fillStyle = '#7fd48a';
+      ctx.fillRect(x, y, PB_W * frac, MB_H);
+    }
+    ctx.restore();
+    label(ctx, '走位', x - 34, y + MB_H, FONT_BAR, '#c9cfd8');
+  }
+
+  /**
+   * draw(ctx, imgs, match, t, info) — the full HUD. match is a CC.Match
+   * (or a stand-in exposing the fields read here: p1/p2 {hp, angle,
+   * power, ammo, moveBudget, lastPower, weapon}, turn, round, wind,
+   * timer, state). t is the logical time in seconds driving the warning
+   * flash; defaults to wall clock. info (optional): { charge: null |
+   * {descending} } — the battle scene's charge context.
    * Rendering only — nothing here mutates match. Missing images skip
    * their element; the text strip always draws.
    */
-  function draw(ctx, imgs, match, t) {
+  function draw(ctx, imgs, match, t, info) {
     if (!ctx || !match) { return; }
     if (t === undefined) {
       t = (typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000;
     }
+    info = info || {};
     var W = ctx.canvas.width;
     var bar = imgs ? imgs.healthbarRed : null;
 
@@ -306,12 +427,17 @@
       label(ctx, String(secs), W / 2, TIMER_Y, FONT_TIMER, color);
     }
 
-    label(ctx, windText(match.wind), W / 2, WIND_Y, FONT_WIND, COLOR_WIND);
+    drawWind(ctx, match.wind, W / 2, WIND_Y);
     label(ctx, '第 ' + (match.round > 0 ? match.round : 1) + ' 回合', W / 2, ROUND_Y, FONT_ROUND, COLOR_ROUND);
 
-    // gauge shows the side to move: elevation needle (+ power while charging)
+    // power strip + walking budget (the dial below is elevation-only now)
+    var charging = match.state === 'CHARGE';
+    drawMoveBar(ctx, match);
+    drawPowerBar(ctx, match, charging, !!(info.charge && info.charge.descending));
+
+    // gauge shows the side to move: elevation needle + digital angle
     var active = sideOf(match, match.turn);
-    drawGauge(ctx, imgs ? imgs.gauge : null, active.angle, active.power, match.state === 'CHARGE');
+    drawGauge(ctx, imgs ? imgs.gauge : null, active.angle, charging);
   }
 
   CC.HUD = { draw: draw, windText: windText };

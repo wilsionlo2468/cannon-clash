@@ -1,12 +1,14 @@
 /* CC.Input — keyboard state + global keys, dispatching to the active
- * scene sink (browser global). Task-11 brief, literal key mapping:
- *   P1: A/D elevation +/-40 deg/s (clamped 0..85), W cycle weapon,
- *       S hold-to-charge, release fires.
- *   P2: ArrowLeft/ArrowRight/ArrowUp/ArrowDown — same roles.
+ * scene sink (browser global). Unified control map (both clusters drive
+ * whichever side holds the turn — hot-seat, no per-side key sets):
+ *   A/D or ←/→  walk (AIM only, per-turn budget)
+ *   W/S or ↑/↓  elevation ±40 deg/s (clamped 0..85)
+ *   SPACE hold→release  charge & fire (ping-pong curve, release = power)
+ *   Q/E or Tab  cycle weapon (E/Tab forward, Q back)
  *   Global: M mute, ESC back to title, F fullscreen.
  * The active scene (CC.Scenes) receives keyDown(key, e) / keyUp(key, e)
  * / update(dt) through setSink(); input.js itself owns only the held-key
- * set and the three global keys.
+ * set and the global keys.
  */
 (function (root) {
   'use strict';

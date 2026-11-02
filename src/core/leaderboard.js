@@ -185,6 +185,44 @@
   }
 
   /**
+   * upsert(board, record, opts) -> rank|null — add() variant for records
+   * that represent a RUNNING value keyed by identity (the pvp combo's
+   * streak, 規格 §5 「兩人一條記錄，拆夥重新計數」; review finding 2).
+   * A record whose normalized name already exists on the board is
+   * UPDATED IN PLACE only when the new score is strictly better under
+   * the board's order (streaks desc: higher; hell asc: fewer); an equal
+   * or worse score is a no-op and returns the existing entry's rank.
+   * An unknown name is inserted exactly like add() (arrival push, sort,
+   * top-8 trim). opts are add()'s (rawName support included). One
+   * record per identity on the board — repeated rematches never stack.
+   */
+  function upsert(board, record, opts) {
+    var order = resolveOrder(board, opts);
+    var storage = opts && opts.storage ? opts.storage : getDefaultStorage();
+    var boards = readBoards(storage);
+
+    var entry = {
+      name: normalizeName(record && record.name, opts && opts.defaultName),
+      score: record ? record.score : undefined
+    };
+    var list = boards[board];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].name === entry.name) {
+        var better = order === 'desc'
+          ? entry.score > list[i].score
+          : entry.score < list[i].score;
+        if (!better) { return i + 1; } // stale/equal rematch: untouched
+        var found = list[i]; // capture BEFORE the sort reorders the array
+        found.score = entry.score;
+        list.sort(order === 'asc' ? byAsc : byDesc);
+        writeBoards(storage, boards);
+        return list.indexOf(found) + 1; // may have moved in the ranking
+      }
+    }
+    return add(board, record, opts); // unknown identity: plain insert
+  }
+
+  /**
    * top(board, n, opts) -> [{name, score}]
    * The board's best n records (default 8) in rank order: position 0 is
    * rank 1 (gold). opts: order override, storage — as in add(). Returns
@@ -212,6 +250,7 @@
 
   CC.Leaderboard = {
     add: add,
+    upsert: upsert,
     top: top,
     normalizeName: normalizeName,
     _reset: _reset

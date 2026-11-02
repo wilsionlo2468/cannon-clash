@@ -23,7 +23,7 @@
   }
 
   function create() {
-    var held = Object.create(null); // normalized key -> true while down
+    var held = Object.create(null); // normalized key -> true while down (cleared on blur)
     var sink = null;                // active scene handler (may be null)
 
     function onKeyDown(e) {
@@ -33,6 +33,10 @@
       // The active scene sees the key first; returning true consumes it
       // (the title's name entry swallows 'm', everything else falls
       // through to the global keys below).
+      // keep arrows/space from scrolling the page (no other scrollable
+      // content; harmless when a scene consumes them)
+      if (key === 'ArrowUp' || key === 'ArrowDown' || key === 'ArrowLeft' ||
+          key === 'ArrowRight' || key === ' ') { e.preventDefault(); }
       if (sink && sink.keyDown && sink.keyDown(key, e) === true) { return; }
       // Global keys (unconsumed): M mute, F fullscreen. ESC is scene-flow
       // and is handled by the scene's keyDown.
@@ -55,11 +59,18 @@
       }
     }
 
+    function onBlur() {
+      // window lost focus: no keyup will arrive — drop every held key so
+      // elevation does not keep drifting after alt-tab (review minor)
+      held = Object.create(null);
+    }
+
     return {
       /** Install the window listeners (called once by main.js). */
       attach: function () {
         root.addEventListener('keydown', onKeyDown);
         root.addEventListener('keyup', onKeyUp);
+        root.addEventListener('blur', onBlur);
       },
       /** Swap the active scene sink: {keyDown?, keyUp?, update?}. */
       setSink: function (s) { sink = s; },

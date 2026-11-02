@@ -42,7 +42,8 @@
     // session-persistent bits that survive scene switches:
     names: { p1: '', p2: '' },         // editable on the title screen
     limit: true,                       // title toggle: 30s turn limit on/off
-    streaks: { pvp: 0, easy: 0, normal: 0, hell: 0 } // session win streaks
+    streaks: { easy: 0, normal: 0, hell: 0 }, // session win streaks (per difficulty)
+    pvpCombo: null,  // {name, streak} — current pair's combo streak (resets on a lineup change)
   };
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -78,8 +79,7 @@
     ctx.restore();
     for (var i = 0; i < items.length; i++) {
       var text = items[i] + (i === cursor ? ' ◀' : '');
-      label(ctx, text, x, y + i * lh,
-        selectedTag && i === selectedTag ? FONT_ITEM : FONT_ITEM,
+      label(ctx, text, x, y + i * lh, FONT_ITEM,
         i === cursor ? MENU_HI : MENU_LO);
     }
   }
@@ -298,13 +298,17 @@
       var streak;
       var board;
       if (mode === 'pvp') {
-        // the pair streak: either side winning continues it
-        streak = S.streaks.pvp + 1;
-        S.streaks.pvp = streak;
+        // the pair streak: either side winning continues it. The streak
+        // belongs to the COMBO NAME (規格 §5: 兩人一條記錄，拆夥重新計數)
+        // — a different pairing restarts at 1 (review fix: the session
+        // streak used to be global and never reset on a lineup change).
+        var combo = NAMES.p1 + '+' + NAMES.p2;
+        streak = (S.pvpCombo && S.pvpCombo.name === combo) ? S.pvpCombo.streak + 1 : 1;
+        S.pvpCombo = { name: combo, streak: streak };
         board = 'streaks';
-        CC.Leaderboard.add('streaks',
-          { name: NAMES.p1 + '+' + NAMES.p2, score: streak },
-          { rawName: true });
+        // upsert: one record per pairing, higher streak replaces in place,
+        // a lower/equal rematch leaves the board untouched
+        CC.Leaderboard.upsert('streaks', { name: combo, score: streak }, { rawName: true });
       } else {
         var delta = match.streakDelta;
         streak = delta === 1 ? S.streaks[difficultyKey] + 1 : 0;
@@ -497,7 +501,7 @@
       var hint = '';
       if (b.flight) { hint = ''; }
       else if (isAiTurn()) { hint = b.ai && b.ai.phase === 'tween' ? 'AI 調整砲管…' : 'AI 思考中…'; }
-      else if (human[match.turn]) { hint = match.turn === 'P1' ? +'P1 ' + NAMES.p1 + '：A/D 仰角 W 武器 S 蓄力發射' : +'P2 ' + NAMES.p2 + '：←/→ 仰角 ↑ 武器 ↓ 蓄力發射'; }
+      else if (human[match.turn]) { hint = match.turn === 'P1' ? 'P1 ' + NAMES.p1 + '：A/D 仰角 W 武器 S 蓄力發射' : 'P2 ' + NAMES.p2 + '：←/→ 仰角 ↑ 武器 ↓ 蓄力發射'; }
       if (hint) { label(ctx, hint, ctx.canvas.width / 2, 160, FONT_HINT, MENU_HI); }
     };
 

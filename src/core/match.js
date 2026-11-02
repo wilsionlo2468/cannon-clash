@@ -105,15 +105,31 @@
       match.streakDelta = opts.streakKey ? (winner === streakSide ? 1 : -1) : null;
     }
 
-    // Hand the turn over: side switch, wind re-roll, round+1, fresh clock.
+    // Hand the turn over: side switch, wind re-roll, round+1, fresh clock,
+    // fresh walking budgets for both cannons.
     function advance(state) {
       match.turn = other(match.turn);
       match.round += 1;
       match.wind = rollWind(rng);
       match.timer = limit > 0 ? limit : 0;
+      p1.moveBudget = CC.Cannon.MOVE_RANGE;
+      p2.moveBudget = CC.Cannon.MOVE_RANGE;
       match.state = state;
       return state;
     }
+
+    /**
+     * move(dx) -> number|null — the current turn's cannon walks dx px
+     * (signed) within its per-turn budget, AIM only (once the charge
+     * begins the stance is frozen). Returns the px actually moved
+     * (0 = blocked by budget/wall), null outside AIM. Movement re-seats
+     * the cannon on the terrain (walkable() makes the valley walls and
+     * crater rims natural barriers).
+     */
+    match.move = function (dx) {
+      if (match.state !== 'AIM') { return null; }
+      return cannonOf(match.turn).move(dx);
+    };
 
     /**
      * startCharge() -> 'CHARGE'|null — AIM -> CHARGE; the input layer

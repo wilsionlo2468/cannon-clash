@@ -42,7 +42,8 @@
       angle: 45,
       power: 0,
       ammo: ammo,
-      weapon: 'normal'
+      weapon: 'normal',
+      moveBudget: MOVE_RANGE // per-turn walking budget (match resets it)
     };
 
     /**
@@ -97,6 +98,43 @@
       cannon.sink();
     };
 
+    /**
+     * knock(dir) — heavy-shell shockwave: shove the cannon KNOCKBACK px
+     * horizontally (dir is the unit direction, +1/-1), clamped to the
+     * field, then re-seat it on the surface below the new x. Does not
+     * touch the move budget — being shoved is not walking.
+     */
+    cannon.knock = function (dir) {
+      var x = cannon.x + (dir >= 0 ? 1 : -1) * KNOCKBACK;
+      cannon.x = x < X_MIN ? X_MIN : x > X_MAX ? X_MAX : x;
+      cannon.sink();
+    };
+
+    /**
+     * move(dx) -> number — walk dx px (signed) within this turn's budget.
+     * The request is capped by the remaining budget and the field bounds;
+     * the whole span must be walkable (Terrain.walkable — valley walls
+     * and fresh crater rims refuse) or nothing moves. Returns the px
+     * actually moved (0 when refused), and re-seats the cannon on the
+     * surface under the new x. The view walks in small per-frame steps,
+     * so a refused span reads as "stopped at the wall".
+     */
+    cannon.move = function (dx) {
+      var want = dx;
+      if (want > cannon.moveBudget) { want = cannon.moveBudget; }
+      if (want < -cannon.moveBudget) { want = -cannon.moveBudget; }
+      var nx = cannon.x + want;
+      if (nx < X_MIN) { nx = X_MIN; }
+      if (nx > X_MAX) { nx = X_MAX; }
+      var actual = nx - cannon.x;
+      if (!actual) { return 0; }
+      if (!CC.Terrain.walkable(cannon.x, nx)) { return 0; }
+      cannon.x = nx;
+      cannon.moveBudget -= Math.abs(actual);
+      cannon.sink();
+      return actual;
+    };
+
     return cannon;
   }
 
@@ -132,13 +170,19 @@
   var X_MIN = 80;   // the cannon art is ~164px wide; keep the body
   var X_MAX = 1520; // inside the 1600px field
 
+  // Per-turn walking budget (px), reset by the match every advance —
+  // enough to reposition meaningfully on a platform, not to cross the
+  // field.
+  var MOVE_RANGE = 160;
+
   CC.Cannon = {
     create: create,
     muzzle: muzzle,
     MUZZLE_LEN: MUZZLE_LEN,
     KNOCKBACK: KNOCKBACK,
     X_MIN: X_MIN,
-    X_MAX: X_MAX
+    X_MAX: X_MAX,
+    MOVE_RANGE: MOVE_RANGE
   };
 
   // Node test hook

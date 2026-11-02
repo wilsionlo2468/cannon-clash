@@ -12,7 +12,8 @@ test('upsert: unknown identity inserts like add and returns its rank', () => {
   Board._reset();
   var s = fakeStorage();
   assert.equal(Board.upsert('streaks', { name: 'SUN+MOON', score: 1 }, { rawName: true, storage: s }), 1);
-  assert.deepEqual(Board.top('streaks', 8, { storage: s }), [{ name: 'SUNMOO', score: 1 }]);
+  // R16 rawName: the combo name lands VERBATIM ('+' kept, no 6-char cut)
+  assert.deepEqual(Board.top('streaks', 8, { storage: s }), [{ name: 'SUN+MOON', score: 1 }]);
 });
 
 test('upsert: same pairing rematch with a LOWER streak does not touch the board', () => {
@@ -52,6 +53,48 @@ test('upsert: names normalize before identity comparison (add vs rawName)', () =
   Board.upsert('streaks', { name: 'ACE', score: 2 }, { rawName: true, storage: s });
   Board.upsert('streaks', { name: 'ace', score: 4 }, { rawName: true, storage: s });
   assert.deepEqual(Board.top('streaks', 8, { storage: s }), [{ name: 'ACE', score: 4 }]);
+});
+
+test('rawName (R16): combo names keep the + separator and land verbatim', () => {
+  Board._reset();
+  var s = fakeStorage();
+  Board.add('streaks', { name: 'SUN+MOON', score: 1 }, { rawName: true, storage: s });
+  assert.deepEqual(Board.top('streaks', 8, { storage: s }), [{ name: 'SUN+MOON', score: 1 }]);
+});
+
+test('rawName (R16): control characters are stripped, cap is 16 chars', () => {
+  Board._reset();
+  var s = fakeStorage();
+  Board.add('streaks', { name: 'ABCD+EFGHIJKLMNOPQ', score: 1 }, { rawName: true, storage: s });
+  var list = Board.top('streaks', 8, { storage: s });
+  assert.equal(list[0].name, 'ABCD+EFGHIJKLMNO'); // control char gone, 16 chars max
+  assert.equal(list[0].name.length, 16);
+});
+
+test('rawName (R16): distinct full combo names are distinct identities', () => {
+  Board._reset();
+  var s = fakeStorage();
+  Board.upsert('streaks', { name: 'AB+CDEF', score: 3 }, { rawName: true, storage: s });
+  Board.upsert('streaks', { name: 'ABCDEF+X', score: 1 }, { rawName: true, storage: s });
+  assert.deepEqual(Board.top('streaks', 8, { storage: s }), [
+    { name: 'AB+CDEF', score: 3 },
+    { name: 'ABCDEF+X', score: 1 }
+  ]);
+});
+
+test('rawName (R16): upsert updates an existing combo record in place', () => {
+  Board._reset();
+  var s = fakeStorage();
+  Board.upsert('streaks', { name: 'SUN+MOON', score: 1 }, { rawName: true, storage: s });
+  Board.upsert('streaks', { name: 'SUN+MOON', score: 2 }, { rawName: true, storage: s });
+  assert.deepEqual(Board.top('streaks', 8, { storage: s }), [{ name: 'SUN+MOON', score: 2 }]);
+});
+
+test('without rawName the A-Z0-9 filter and 6-char cap still apply', () => {
+  Board._reset();
+  var s = fakeStorage();
+  Board.add('streaks', { name: 'SUN+MOON', score: 1 }, { storage: s });
+  assert.deepEqual(Board.top('streaks', 8, { storage: s }), [{ name: 'SUNMOO', score: 1 }]);
 });
 
 test('upsert: a different pairing starts fresh (拆夥重新計數) without disturbing others', () => {

@@ -117,8 +117,10 @@
         return;
       }
       // name entry: A-Z/0-9 straight capture, <=6 chars, uppercase.
-      // Returns true (consumed) so the global M-mute doesn't fire on 'm'.
-      if (key.length === 1 && /[A-Za-z0-9]/.test(key)) {
+      // Returns true (consumed) so nothing else reacts — EXCEPT 'm'/'f':
+      // those stay reserved for the global mute/fullscreen keys (spec
+      // §9.1; final review — names simply cannot contain M/F).
+      if (key.length === 1 && /[A-Za-z0-9]/.test(key) && key !== 'm' && key !== 'f') {
         var kk = 'p' + (this.slot + 1);
         if (S.names[kk].length < 6) { S.names[kk] += key.toUpperCase(); }
         return true;
@@ -312,12 +314,12 @@
       } else {
         var delta = match.streakDelta;
         streak = delta === 1 ? S.streaks[difficultyKey] + 1 : 0;
+        // spec §5 has only two boards (dual streaks / hell clear): the
+        // single-player streak lives in the session state only (final
+        // review finding 2 — 'ACE' entries must not pollute the dual board)
         S.streaks[difficultyKey] = streak;
-        if (streak > 0) {
-          CC.Leaderboard.add('streaks', { name: NAMES.p1, score: streak }, { rawName: true });
-        }
         if (difficultyKey === 'hell' && delta === 1) {
-          CC.Leaderboard.add('hell', { name: NAMES.p1, score: rounds }, { rawName: true });
+          CC.Leaderboard.add('hell', { name: NAMES.p1, score: rounds }); // plain name: normal filter
         }
       }
       set('settle', {

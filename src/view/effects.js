@@ -154,7 +154,110 @@
     ctx.restore();
   }
 
-  CC.Effects = { explosion: explosion, crater: crater, lastShot: lastShot };
+  // ---------------------------------------------------------------- *
+  // Juice (Phase 5): flight trail, ground shadow, damage popups, hit
+  // flash. All stateless-in-(args, t) like explosion() — the scene keeps
+  // the timers and calls these every frame.
+  var TRAIL_SEGMENTS = 16;   // how many recent flight samples glow
+  var TRAIL_WIDTH = 3;
+  var SHADOW_MAX = 18;       // shadow rx at ground level
+  var SHADOW_MIN = 6;
+  var SHADOW_FADE_H = 900;   // px of altitude at which the shadow vanishes
+  var DMG_TIME = 0.9;        // s a damage number floats
+  var DMG_RISE = 46;
+  var HITFLASH_TIME = 0.32;
+
+  /**
+   * flightTrail(ctx, points, idx, color) — the glow behind the shell in
+   * flight: the most recent TRAIL_SEGMENTS samples as a fading polyline.
+   * color is the shooter's side color; idx is the current sample index.
+   */
+  function flightTrail(ctx, points, idx, color) {
+    if (!points || points.length < 2) { return; }
+    var from = Math.max(0, idx - TRAIL_SEGMENTS);
+    ctx.save();
+    ctx.lineCap = 'round';
+    for (var i = from + 1; i <= Math.min(idx, points.length - 1); i++) {
+      var p = (i - from) / (Math.min(idx, points.length - 1) - from + 1);
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.05 + 0.4 * p * p;
+      ctx.lineWidth = TRAIL_WIDTH * (0.4 + 0.6 * p);
+      ctx.beginPath();
+      ctx.moveTo(points[i - 1].x, points[i - 1].y);
+      ctx.lineTo(points[i].x, points[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * shellShadow(ctx, x, shellY, groundY) — soft ellipse on the ground
+   * under the shell: smaller and fainter the higher it flies. groundY is
+   * Terrain.heightAt(x) (the caller reads it).
+   */
+  function shellShadow(ctx, x, shellY, groundY) {
+    var h = groundY - shellY;
+    if (h <= 0 || h >= SHADOW_FADE_H) { return; }
+    var p = h / SHADOW_FADE_H; // 0 at ground, ->1 high
+    var rx = SHADOW_MAX + (SHADOW_MIN - SHADOW_MAX) * p;
+    ctx.save();
+    ctx.globalAlpha = 0.32 * (1 - p);
+    ctx.fillStyle = 'rgba(10, 8, 8, 1)';
+    ctx.beginPath();
+    ctx.ellipse(x, groundY - 2, rx, rx * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /**
+   * damageNumber(ctx, x, y, text, t) — a damage popup floating up from
+   * the struck cannon. Lives DMG_TIME seconds; red, outlined, easing up.
+   */
+  function damageNumber(ctx, x, y, text, t) {
+    if (!(t >= 0) || t >= DMG_TIME) { return; }
+    var p = t / DMG_TIME;
+    ctx.save();
+    ctx.globalAlpha = 1 - p * p;
+    ctx.font = 'bold 30px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(10, 10, 14, 0.9)';
+    ctx.fillStyle = '#ff5a48';
+    var ty = y - DMG_RISE * easeOut(p);
+    ctx.strokeText(text, x, ty);
+    ctx.fillText(text, x, ty);
+    ctx.restore();
+  }
+
+  /**
+   * hitFlash(ctx, x, y, t) — a white burst over a cannon the moment a
+   * blast connects with it. Lives HITFLASH_TIME seconds.
+   */
+  function hitFlash(ctx, x, y, t) {
+    if (!(t >= 0) || t >= HITFLASH_TIME) { return; }
+    var p = t / HITFLASH_TIME;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.85 * (1 - p);
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x, y - 20, 26 + 26 * easeOut(p), 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  CC.Effects = {
+    explosion: explosion,
+    crater: crater,
+    lastShot: lastShot,
+    flightTrail: flightTrail,
+    shellShadow: shellShadow,
+    damageNumber: damageNumber,
+    hitFlash: hitFlash,
+    DMG_TIME: DMG_TIME,
+    HITFLASH_TIME: HITFLASH_TIME
+  };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

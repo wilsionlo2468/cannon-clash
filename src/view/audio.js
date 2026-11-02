@@ -124,7 +124,30 @@
     }
   }
 
-  // --- charge rising tone (start/stop pair) ---------------------------
+  // 命中悶響：a shell actually connecting — low thump + a hard noise tap.
+  function playHit() {
+    var t0 = ctx.currentTime;
+    var osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(150, t0);
+    osc.frequency.exponentialRampToValueAtTime(55, t0 + 0.22);
+    var og = envGain(t0, 0.005, 0.6, 0.25);
+    osc.connect(og).connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.3);
+
+    var src = ctx.createBufferSource();
+    src.buffer = noiseBuffer(0.08);
+    var hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 900;
+    var ng = envGain(t0, 0.002, 0.3, 0.07);
+    src.connect(hp).connect(ng).connect(ctx.destination);
+    src.start(t0);
+    src.stop(t0 + 0.1);
+  }
+
+  // --- charge tone (directional) + flight whistle (start/stop pairs) ---
 
   var charge = null; // {osc, g} while the charge tone is live
 
@@ -133,29 +156,66 @@
     var t0 = ctx.currentTime;
     var osc = ctx.createOscillator();
     osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(180, t0);
-    osc.frequency.linearRampToValueAtTime(820, t0 + 1.6); // rises over the full charge time
+    osc.frequency.setValueAtTime(220, t0); // the scene steers it via chargeTone()
     var g = ctx.createGain();
     g.gain.setValueAtTime(0.0001, t0);
-    g.gain.linearRampToValueAtTime(0.12, t0 + 0.05);
+    g.gain.linearRampToValueAtTime(0.1, t0 + 0.05);
     osc.connect(g).connect(ctx.destination);
     osc.start(t0);
     charge = { osc: osc, g: g };
+  }
+
+  /**
+   * chargeTone(freq) — steer the live charge tone's pitch. The scene maps
+   * it to the charge POWER (not time), so it rises while the curve rises
+   * and FALLS on the descent — the ear confirms "力度能大也能小".
+   */
+  function chargeTone(freq) {
+    if (!charge) { return; }
+    charge.osc.frequency.setTargetAtTime(freq, ctx.currentTime, 0.03);
   }
 
   function chargeStop() {
     if (!charge) { return; }
     var now = ctx.currentTime;
     charge.g.gain.cancelScheduledValues(now);
-    charge.g.gain.setValueAtTime(charge.g.gain.value || 0.12, now);
+    charge.g.gain.setValueAtTime(charge.g.gain.value || 0.1, now);
     charge.g.gain.exponentialRampToValueAtTime(0.0001, now + 0.08);
     charge.osc.stop(now + 0.1);
     charge = null;
   }
 
+  var whistle = null; // {osc, g} while a shell is in the air
+
+  function whistleStart() {
+    if (!ok() || whistle) { return; }
+    var t0 = ctx.currentTime;
+    var osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(520, t0);
+    osc.frequency.linearRampToValueAtTime(980, t0 + 0.45); // dive feels faster
+    var g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(0.06, t0 + 0.08);
+    osc.connect(g).connect(ctx.destination);
+    osc.start(t0);
+    whistle = { osc: osc, g: g };
+  }
+
+  function whistleStop() {
+    if (!whistle) { return; }
+    var now = ctx.currentTime;
+    whistle.g.gain.cancelScheduledValues(now);
+    whistle.g.gain.setValueAtTime(whistle.g.gain.value || 0.06, now);
+    whistle.g.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+    whistle.osc.stop(now + 0.07);
+    whistle = null;
+  }
+
   /**
-   * play(name) — 'shot' | 'explosion' | 'click' | 'beep'. Inert while
-   * muted or before unlock(); charge uses chargeStart/chargeStop.
+   * play(name) — 'shot' | 'explosion' | 'click' | 'beep' | 'hit'. Inert
+   * while muted or before unlock(); charge/whistle use their start/stop
+   * pairs (and chargeTone).
    */
   function play(name) {
     if (!ok()) { return; }
@@ -163,6 +223,7 @@
     else if (name === 'explosion') { playExplosion(); }
     else if (name === 'click') { playClick(); }
     else if (name === 'beep') { playBeep(); }
+    else if (name === 'hit') { playHit(); }
   }
 
   function toggleMuted() {
@@ -176,7 +237,10 @@
     unlock: unlock,
     play: play,
     chargeStart: chargeStart,
+    chargeTone: chargeTone,
     chargeStop: chargeStop,
+    whistleStart: whistleStart,
+    whistleStop: whistleStop,
     toggleMuted: toggleMuted,
     isMuted: function () { return muted; },
     MUTE_KEY: MUTE_KEY

@@ -25,6 +25,11 @@
   var MOVE_RATE = 140;   // px/s while a walk key is held (budget 160 -> ~1.1s)
   var CRATE_W = 48;      // display width of the supply crate
   var BANNER_TIME = 1;   // s the turn banner shows
+  var RECOIL_TIME = 0.18; // s the barrel kick plays after firing
+  var RECOIL_PX = 8;      // px the cannon shifts back at the kick's peak
+
+  // Per-side trail/tint colors (match the HUD's last-shot notches).
+  var SIDE_COLOR = { P1: '#ff9a3d', P2: '#4fc3ff' };
 
   // Unified controls (both clusters drive whichever side holds the turn):
   //   A/D or ←/→  walk (AIM only, per-turn budget)
@@ -249,6 +254,11 @@
       lastFrameMs: nowMs(),// wall-clock stamp of the last fixed step
       lastTurn: null,      // turn-banner tracking
       banner: null,        // {text, t0} — shown BANNER_TIME s at each turn start
+      // juice state (Phase 5)
+      cam: CC.Camera.create(),
+      recoil: { P1: 0, P2: 0 }, // seconds of barrel kick left, per side
+      dmgPops: [],         // [{x, y, text, t0}] damage numbers
+      hitFlashes: [],      // [{x, y, t0}] white bursts on struck cannons
       // AI turn state
       ai: null,        // {phase:'wait', at} | {phase:'tween', from, to, power, t0}
       over: false
@@ -303,7 +313,9 @@
         by: snap.side
       };
       b.trail = null; // the old trail retires when a new shell flies
+      b.recoil[snap.side] = RECOIL_TIME;
       CC.Audio.play('shot');
+      CC.Audio.whistleStart();
     }
 
     function land() {
@@ -314,9 +326,20 @@
       b.trail = { points: b.flight.points, impact: impact };
       b.flight = null;
       CC.Audio.play('explosion');
+      CC.Audio.whistleStop();
       var last = match.land(impact); // core settles damage, sets RESOLVE
       if (last) {
         CC.Supply.pickup(match, by, last.explosions);
+        // impact response: camera punch+shake by the damage, hit feedback
+        // on every cannon the blast actually connected with
+        var total = last.dmg.P1 + last.dmg.P2;
+        b.cam.kick(total > 0 ? Math.min(1, 0.35 + total / 60) : 0.18);
+        if (total > 0) { CC.Audio.play('hit'); }
+        for (var hi = 0; hi < last.hits.length; hi++) {
+          var hc = last.hits[hi].cannon;
+          b.dmgPops.push({ x: hc.x, y: hc.y - 74, text: '-' + last.hits[hi].dmg, t0: S.t });
+          b.hitFlashes.push({ x: hc.x, y: hc.y, t0: S.t });
+        }
       }
       b.resolveAt = S.t + RESOLVE_PAUSE;
     }
@@ -417,10 +440,16 @@
         if (charging && b.chargeActive) {
           b.chargeT += dt;
           c.power = CC.Ballistics.chargePower(b.chargeT);
+          // the tone follows POWER, not time: it falls on the descent too
+          CC.Audio.chargeTone(220 + c.power * 6);
         }
       }
       if (st !== 'CHARGE') { b.chargeActive = false; }
       b.lastFrameMs = nowMs(); // keyup adds the wall-clock residual to chargeT
+
+      // barrel kick decay
+      b.recoil.P1 = Math.max(0, b.recoil.P1 - dt);
+      b.recoil.P2 = Math.max(0, b.recoil.P2 - dt);
 
       // AI turn: 1.2s think delay, then a 0.8s barrel tween, then fire.
       if (isAiTurn() && (st === 'AIM' || st === 'SUDDEN')) {
@@ -502,12 +531,30 @@
           CC.Audio.play('beep');
         }
       }
+
+      // camera: chase the shell in flight, ride the active gun otherwise
+      var shellState = null;
+      if (b.flight) {
+        var fpts = b.flight.points;
+        var fidx = clamp(Math.floor((S.t - b.flight.t0) / STEP), 0, fpts.length - 1);
+        var cur = fpts[fidx];
+        var nxt = fpts[Math.min(fpts.length - 1, fidx + 1)];
+        shellState = { x: cur.x, y: cur.y, vx: (nxt.x - cur.x) * 60, vy: (nxt.y - cur.y) * 60 };
+      }
+      b.cam.update(dt, { state: match.state, shell: shellState, focus: sideCannon(match.turn) });
     };
 
     b.draw = function (ctx) {
-      drawBackdrop(ctx, S.t);
+      var W = ctx.canvas.width;
+      var H = ctx.canvas.height;
       var imgs = S.imgs;
       var i;
+
+      // --- world layers under the camera transform ---
+      ctx.clearRect(0, 0, W, H);
+      ctx.save();
+      b.cam.apply(ctx);
+      CC.Layers.draw(ctx, imgs, S.t);
       for (i = 0; i < b.craters.length; i++) {
         CC.Effects.crater(ctx, imgs, b.craters[i].x, b.craters[i].y);
       }
@@ -518,15 +565,20 @@
         var ch = cw * imgs.crate.height / imgs.crate.width;
         ctx.drawImage(imgs.crate, match.crate.x - cw / 2, match.crate.y - ch, cw, ch);
       }
-      CC.Sprites.drawCannon(ctx, imgs, p1);
-      CC.Sprites.drawCannon(ctx, imgs, p2);
+      // cannons with the barrel-kick offset (presentation only: a cloned
+      // stance, the core object is never mutated)
+      drawGun(ctx, p1);
+      drawGun(ctx, p2);
       if (b.flight) {
         var pts = b.flight.points;
         var idx = clamp(Math.floor((S.t - b.flight.t0) / STEP), 0, pts.length - 1);
         var a = pts[Math.max(0, idx - 1)];
         var c2 = pts[Math.min(pts.length - 1, idx + 1)];
+        var cur = pts[idx];
+        CC.Effects.shellShadow(ctx, cur.x, cur.y, CC.Terrain.heightAt(cur.x));
+        CC.Effects.flightTrail(ctx, pts, idx, SIDE_COLOR[b.flight.by]);
         CC.Sprites.drawShell(ctx, imgs, {
-          x: pts[idx].x, y: pts[idx].y, type: b.flight.type,
+          x: cur.x, y: cur.y, type: b.flight.type,
           angle: Math.atan2(c2.y - a.y, c2.x - a.x)
         });
       }
@@ -551,27 +603,49 @@
         ctx.restore();
       }
       if (b.trail) { CC.Effects.lastShot(ctx, b.trail.points, b.trail.impact); }
-      // charge info for the power bar: game-time held -> descending leg
+      // hit feedback: white bursts + floating damage numbers
+      for (i = b.hitFlashes.length - 1; i >= 0; i--) {
+        var hf = b.hitFlashes[i];
+        var hAge = S.t - hf.t0;
+        if (hAge >= CC.Effects.HITFLASH_TIME) { b.hitFlashes.splice(i, 1); continue; }
+        CC.Effects.hitFlash(ctx, hf.x, hf.y, hAge);
+      }
+      for (i = b.dmgPops.length - 1; i >= 0; i--) {
+        var dpop = b.dmgPops[i];
+        var dAge = S.t - dpop.t0;
+        if (dAge >= CC.Effects.DMG_TIME) { b.dmgPops.splice(i, 1); continue; }
+        CC.Effects.damageNumber(ctx, dpop.x, dpop.y, dpop.text, dAge);
+      }
+      ctx.restore();
+
+      // --- HUD, hints, banner: screen space, camera-free ---
       var charge = null;
       if (match.state === 'CHARGE' && b.chargeActive) {
         charge = { elapsed: b.chargeT, descending: (b.chargeT % 3.8) > 1.9 };
       }
       CC.HUD.draw(ctx, imgs, match, S.t, charge);
-      // status hint under the weapon line
       var hint = '';
       if (b.flight) { hint = ''; }
       else if (isAiTurn()) { hint = b.ai && b.ai.phase === 'tween' ? 'AI 調整砲管…' : 'AI 思考中…'; }
       else if (human[match.turn]) { hint = 'A/D 走位 · W/S 仰角 · Q/E 換彈 · 長按空白蓄力，放開發射'; }
-      if (hint) { label(ctx, hint, ctx.canvas.width / 2, 160, FONT_HINT, MENU_HI); }
+      if (hint) { label(ctx, hint, W / 2, 160, FONT_HINT, MENU_HI); }
 
-      // turn banner (1s, fades at both ends; only while still aiming)
       if (b.banner && match.state === 'AIM' && S.t - b.banner.t0 < BANNER_TIME) {
         var bp = (S.t - b.banner.t0) / BANNER_TIME;
         var alpha = bp < 0.15 ? bp / 0.15 : bp > 0.75 ? (1 - bp) / 0.25 : 1;
-        label(ctx, b.banner.text, ctx.canvas.width / 2, 300, FONT_BANNER,
+        label(ctx, b.banner.text, W / 2, 300, FONT_BANNER,
           'rgba(255, 223, 138, ' + clamp(alpha, 0, 1).toFixed(3) + ')');
       }
     };
+
+    // one cannon with its recoil offset applied (cloned stance)
+    function drawGun(ctx, c) {
+      var p = b.recoil[c.side] > 0 ? b.recoil[c.side] / RECOIL_TIME : 0;
+      var back = c.side === 'P1' ? -1 : 1; // kick away from the bore
+      CC.Sprites.drawCannon(ctx, S.imgs, {
+        side: c.side, x: c.x + back * RECOIL_PX * p, y: c.y, angle: c.angle
+      });
+    }
 
     return b;
   }

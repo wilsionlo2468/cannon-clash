@@ -248,11 +248,13 @@
       return { weapon: usable ? c.weapon : 'normal', side: match.turn };
     }
 
-    // View-side flight: integrate from the muzzle, truncate at the first
-    // real terrain contact (Terrain.hit per segment), keep the samples.
+    // View-side flight: integrate from the cannon's MUZZLE — the shared
+    // core origin (CC.Cannon.muzzle; the AI solver uses the same point,
+    // so shots land where the solution aimed) — and truncate at the first
+    // real terrain contact (Terrain.hit per segment), keeping the samples.
     function launchFlight(snap) {
       var c = sideCannon(snap.side);
-      var m = CC.Sprites.muzzle(snap.side, c.x, c.y, c.angle);
+      var m = CC.Cannon.muzzle(c);
       var sim = CC.Ballistics.simulate(m.x, m.y, snap.side === 'P2' ? 180 - c.angle : c.angle, c.power, match.wind);
       var points = sim.points;
       var impact = null;

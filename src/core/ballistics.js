@@ -88,7 +88,32 @@
     return (lo + hi) / 2; // continuous impact x: converged onto the target
   }
 
-  CC.Ballistics = { simulate: simulate, solvePower: solvePower };
+  // Charge curve: 0→40 at CHARGE_FAST (100/s), then 40→100 at CHARGE_SLOW
+  // (40/s) — quick to small powers, precise near the top. At 100 the
+  // charge falls back down the same curve and the cycle repeats, so any
+  // power is reachable ("power can only grow" is gone). The up-leg is
+  // 0.4 + 1.5 = 1.9s, the full period 3.8s. chargePower(t) is the exact
+  // value t seconds after the charge began: the view feeds it the precise
+  // key-held duration instead of accumulating per-frame, so the released
+  // power carries no frame-quantization error.
+  var CHARGE_FAST = 100; // power/s below the knee
+  var CHARGE_SLOW = 40;  // power/s above the knee
+  var CHARGE_KNEE = 40;
+  var CHARGE_T1 = CHARGE_KNEE / CHARGE_FAST;                      // 0.4s
+  var CHARGE_T2 = CHARGE_T1 + (100 - CHARGE_KNEE) / CHARGE_SLOW;  // 1.9s
+  var CHARGE_PERIOD = 2 * CHARGE_T2;                              // 3.8s
+
+  function chargePower(t) {
+    if (!(t > 0)) { return 0; }
+    var ph = t % CHARGE_PERIOD;
+    if (ph > CHARGE_T2) { ph = CHARGE_PERIOD - ph; } // descending leg mirrors the up-leg
+    var p = ph <= CHARGE_T1
+      ? ph * CHARGE_FAST
+      : CHARGE_KNEE + (ph - CHARGE_T1) * CHARGE_SLOW;
+    return Math.min(100, p);
+  }
+
+  CC.Ballistics = { simulate: simulate, solvePower: solvePower, chargePower: chargePower };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

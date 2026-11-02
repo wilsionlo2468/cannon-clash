@@ -80,7 +80,31 @@
     return cannon;
   }
 
-  CC.Cannon = { create: create };
+  // Barrel length in px from the pivot to the muzzle — the launch origin.
+  // The barrel art reaches ~131-136px along the bore, so 130 keeps the
+  // launch visually at the tip while giving core and view ONE shared
+  // origin: before this, the AI solved from the stance while the view
+  // flew from the art muzzle — a fixed few-px bias on every AI shot.
+  var MUZZLE_LEN = 130;
+
+  /**
+   * muzzle(cannon, angleDeg?) -> {x, y}
+   * The launch origin: the cannon's pivot pushed MUZZLE_LEN px along the
+   * bore. Elevation defaults to the cannon's live angle (the shared
+   * 0..85; pass the directional angle to preview another elevation). The
+   * per-side firing direction is the cannon convention — P1's bore points
+   * +x, P2's -x — and screen y grows downward, hence -sin.
+   */
+  function muzzle(cannon, angleDeg) {
+    var a = (angleDeg === undefined ? cannon.angle : angleDeg) * Math.PI / 180;
+    var dir = cannon.side === 'P1' ? 1 : -1;
+    return {
+      x: cannon.x + dir * Math.cos(a) * MUZZLE_LEN,
+      y: cannon.y - Math.sin(a) * MUZZLE_LEN
+    };
+  }
+
+  CC.Cannon = { create: create, muzzle: muzzle, MUZZLE_LEN: MUZZLE_LEN };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

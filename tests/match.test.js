@@ -11,9 +11,10 @@
  *         passes through RESOLVE — the view times the 1.2s pause and
  *         calls next(), core builds in no countdown
  *   turn limit: tick(dt) counts down in AIM/CHARGE (皆然); expiry
- *     auto-fires at power=50 — the brief's literal value, confirmed by
- *     the controller over the plan's "current charge" wording — and the
- *     machine must never deadlock on the clock (review focus 3)
+ *     auto-fires — mid-charge with the CURRENT charge, from AIM at the
+ *     pinned power=50 — and the machine must never deadlock on the
+ *     clock (review focus 3, revised: a partial charge is no longer
+ *     discarded)
  *   HP zero -> OVER at the resolve's next(); same-landing double zero ->
  *     state:'SUDDEN', never an error/deadlock (review focus 5); sudden
  *     death: "HP 高者勝", equal -> the next shot decides with state
@@ -165,13 +166,14 @@ test('tick counts the clock down in AIM; expiry auto-fires at power=50 (review f
   assert.strictEqual(p1.ammo.heavy, 1, 'further ticks are inert in FLIGHT: fires exactly once');
 });
 
-test('charge-phase expiry auto-fires at power=50, discarding the charge (review focus 3)', () => {
+test('charge-phase expiry fires the CURRENT charge, not a pinned 50 (review focus 3, revised)', () => {
   const { p1, match } = setup({ turnLimitSec: 30 });
   assert.strictEqual(match.startCharge(), 'CHARGE');
   p1.power = 73; // the input layer ramps power while the key is held (task 11)
   match.tick(30);
   assert.strictEqual(match.state, 'FLIGHT', 'no deadlock out of CHARGE');
-  assert.strictEqual(p1.power, 50, 'brief pin: auto-fire power=50, not the charged 73');
+  assert.strictEqual(p1.power, 73, 'expiry mid-charge keeps the charged power — a partial charge is no longer discarded');
+  assert.strictEqual(p1.lastPower, 73, 'the fired charge lands in lastPower');
 });
 
 test('turnLimitSec 0 disables the clock entirely', () => {

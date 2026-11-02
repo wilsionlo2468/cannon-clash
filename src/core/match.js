@@ -10,7 +10,8 @@
   // wording — a partial charge is discarded). The RESOLVE pause (1.2s) is
   // view-timed: task 11 calls next(), core builds in no countdown for it.
   var DEFAULT_TURN_LIMIT = 30; // seconds
-  var AUTO_FIRE_POWER = 50;
+  var AUTO_FIRE_POWER = 50;    // clock expiry while still aiming
+  var SUDDEN_POWER = 65;       // fixed power for sudden-death deciding shots
 
   // Controller ruling R12: wind is UNIFORM over the integers -5..+5 —
   // floor(random*11) - 5 gives all 11 values equal probability 1/11.
@@ -116,10 +117,15 @@
 
     /**
      * startCharge() -> 'CHARGE'|null — AIM -> CHARGE; the input layer
-     * ramps cannon.power while the key is held (task 11). Inert elsewhere.
+     * drives cannon.power from the charge clock while the key is held.
+     * The charge always begins from ZERO: power used to survive across
+     * turns (only ever ramped up), making the previous shot's value both
+     * the invisible baseline and a hard floor — the "power can only grow"
+     * ratchet. Inert elsewhere.
      */
     match.startCharge = function () {
       if (match.state !== 'AIM') { return null; }
+      cannonOf(match.turn).power = 0;
       match.state = 'CHARGE';
       return 'CHARGE';
     };
@@ -139,6 +145,13 @@
         return null;
       }
       var c = cannonOf(match.turn);
+      if (match.state === 'SUDDEN') {
+        // Sudden death has no charge mechanic: deciding shots fire at the
+        // fixed power, never the stale last-shot value.
+        c.power = SUDDEN_POWER;
+      }
+      c.lastPower = c.power; // what this shot actually used — the view's
+      c.lastAngle = c.angle; // "previous shot" gauge marker reads these
       var weapon = c.weapon;
       if (!c.spend()) {
         weapon = 'normal';
@@ -218,16 +231,20 @@
     /**
      * tick(dt) — the turn clock. Counts down only in AIM/CHARGE (the
      * brief's 皆然) and only when a limit is set; at zero it auto-fires
-     * the current turn's cannon at the pinned power 50 — discarding any
-     * partial charge — exactly once (FLIGHT freezes the clock), so the
-     * machine can never sit dead on the clock (review focus 3).
+     * exactly once (FLIGHT freezes the clock) so the machine can never
+     * sit dead on the clock (review focus 3). Expiring mid-charge fires
+     * the CURRENT charge — a partial charge is no longer discarded —
+     * while expiring before the charge began falls back to the pinned
+     * AUTO_FIRE_POWER.
      */
     match.tick = function (dt) {
       if (match.state !== 'AIM' && match.state !== 'CHARGE') { return; }
       if (!(limit > 0) || !(dt > 0)) { return; }
       match.timer = Math.max(0, match.timer - dt);
       if (match.timer === 0) {
-        cannonOf(match.turn).power = AUTO_FIRE_POWER;
+        if (match.state === 'AIM') {
+          cannonOf(match.turn).power = AUTO_FIRE_POWER;
+        }
         match.fire();
       }
     };

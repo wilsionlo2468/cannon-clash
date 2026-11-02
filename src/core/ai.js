@@ -147,9 +147,16 @@
     for (var i = 0; i < TIERS.length; i++) {
       var angle = TIERS[i];
       var dir = turn === 'P1' ? angle : 180 - angle;
-      var power = solveTerrainPower(shooter.x, shooter.y, foe.x, dir, wind);
+      // Solve from the MUZZLE (Cannon.muzzle) — the same origin the view
+      // launches from — so the perfect solution carries no stance-to-
+      // muzzle bias. muzzle takes the SHARED elevation (side gives the
+      // bore direction); the simulate calls below keep the directional
+      // angle. The muzzle depends only on the tier's elevation, fixed
+      // across the power bisection.
+      var m = CC.Cannon.muzzle(shooter, angle);
+      var power = solveTerrainPower(m.x, m.y, foe.x, dir, wind);
       if (power === null) { continue; }
-      var c = corridor(shooter.x, shooter.y, dir, power, wind, foe);
+      var c = corridor(m.x, m.y, dir, power, wind, foe);
       if (c.clear) {
         best = { angle: angle, power: power };
         break;

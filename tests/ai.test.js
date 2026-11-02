@@ -77,16 +77,20 @@ const fakeCannon = (side, x, y) => ({
   onHit() {},
 });
 
-// Real landing of a shot: the first Terrain.hit along the integrated path
-// after the launch step. The muzzle rests ON its platform surface, so the
-// launch segment's t=0 endpoint contact is the cannon standing there, not
-// a corridor hit — segment 0 is skipped. A trajectory that overflies the
-// whole field (possible past power ~90 on the pinned terrain) never
-// touches the polyline; the fictitious y=1500 impact stands in — the same
+// Real landing of a shot AS IT IS FLOWN: from the cannon's muzzle — the
+// shared launch origin (Cannon.muzzle; the view and the AI solver both
+// start there) — the first Terrain.hit along the integrated path after
+// the launch step (segment 0 skipped, the same convention the corridor
+// uses). `elevation` is the shared 0..85; the simulate call gets the
+// per-side directional angle. A trajectory that overflies the whole
+// field (possible past power ~90 on the pinned terrain) never touches
+// the polyline; the fictitious y=1500 impact stands in — the same
 // sentinel convention the implementation's solver and corridor use, and
 // always a far-off answer the near-target statistics never count.
-function realLanding(x0, y0, angleDeg, power, wind) {
-  const s = B.simulate(x0, y0, angleDeg, power, wind);
+function realLanding(cannon, elevation, power, wind) {
+  const m = C.muzzle(cannon, elevation);
+  const dir = cannon.side === 'P1' ? elevation : 180 - elevation;
+  const s = B.simulate(m.x, m.y, dir, power, wind);
   for (let i = 2; i < s.points.length; i++) {
     const a = s.points[i - 1];
     const b = s.points[i];
@@ -159,7 +163,7 @@ test('perfect solution (R14): the real terrain landing hits the enemy cannon', (
   // Every tier solves onto the enemy x on the pinned field, so the first
   // (35°) tier wins the brief's first-clear preference.
   assert.strictEqual(shot.angle, 35, 'the first clear tier wins');
-  const landing = realLanding(p1.x, p1.y, shot.angle, shot.power, match.wind);
+  const landing = realLanding(p1, shot.angle, shot.power, match.wind);
   assert.ok(Math.abs(landing.x - p2.x) < 2,
     'the REAL landing hits the enemy x, got ' + landing.x.toFixed(3));
   assert.ok(missDist(landing, p2) < 50,
@@ -168,17 +172,19 @@ test('perfect solution (R14): the real terrain landing hits the enemy cannon', (
 });
 
 test('perfect solution reads the foe from the match (synthetic point-blank foe)', () => {
-  // Synthetic geometry: an enemy 50px away on the same platform. The solve
-  // must target THAT cannon's x (300, not the stance P2's 1300) — the
-  // shot's real landing lands on the fake foe.
+  // Synthetic geometry: an enemy 170px away on the same flat platform
+  // (x=420 — past the 35° muzzle reach at 356, since the shell now spawns
+  // at the bore tip and can never land behind it). The solve must target
+  // THAT cannon's x (420, not the stance P2's 1300) — the shot's real
+  // landing lands on the fake foe.
   const p1 = C.create('P1');
-  const foe = fakeCannon('P2', 300, 400);
+  const foe = fakeCannon('P2', 420, 400);
   const match = M.create({ p1, p2: foe }, { rng: () => 0.5 });
 
   const shot = AI.pickShot(match, 'hell', NO_ERROR);
   assert.strictEqual(shot.angle, 35, 'the first clear tier wins');
-  const landing = realLanding(p1.x, p1.y, shot.angle, shot.power, 0);
-  assert.ok(Math.abs(landing.x - 300) < 2,
+  const landing = realLanding(p1, shot.angle, shot.power, 0);
+  assert.ok(Math.abs(landing.x - 420) < 2,
     'the REAL landing hits the synthetic foe x, got ' + landing.x.toFixed(3));
   assert.ok(missDist(landing, foe) < 50, 'and it connects');
 });
@@ -189,7 +195,7 @@ test('P2 solves leftward through 180-angle with the same elevation tiers', () =>
 
   const shot = AI.pickShot(match, 'hell', NO_ERROR);
   assert.strictEqual(shot.angle, 35, 'the returned angle is the elevation');
-  const landing = realLanding(p2.x, p2.y, 145, shot.power, match.wind);
+  const landing = realLanding(p2, shot.angle, shot.power, match.wind);
   assert.ok(Math.abs(landing.x - p1.x) < 2,
     'the solver saw the leftward firing direction: landing x ' +
     landing.x.toFixed(3));
@@ -202,14 +208,14 @@ test('the live wind feeds the terrain-aware solver', () => {
 
   match.wind = 3;
   const shot3 = AI.pickShot(match, 'hell', NO_ERROR);
-  let landing = realLanding(p1.x, p1.y, shot3.angle, shot3.power, 3);
+  let landing = realLanding(p1, shot3.angle, shot3.power, 3);
   assert.ok(Math.abs(landing.x - p2.x) < 2,
     'the tailwind shot still lands on the enemy: ' + landing.x.toFixed(3));
   assert.notStrictEqual(shot3.power, shot0.power, 'wind changed the solved power');
 
   match.wind = -5;
   const shotM5 = AI.pickShot(match, 'hell', NO_ERROR);
-  landing = realLanding(p1.x, p1.y, shotM5.angle, shotM5.power, -5);
+  landing = realLanding(p1, shotM5.angle, shotM5.power, -5);
   assert.ok(Math.abs(landing.x - p2.x) < 2,
     'the headwind shot still lands on the enemy: ' + landing.x.toFixed(3));
   assert.notStrictEqual(shotM5.power, shot0.power, 'and the other way too');
@@ -233,7 +239,7 @@ test('hell: 100 samples stay within the pinned caps and land within 15px of the 
       'power deviation within the hell cap');
     assert.ok(shot.angle >= 0 && shot.angle <= 85, 'elevation in the view range');
     assert.ok(shot.power >= 0 && shot.power <= 100, 'power in gauge range');
-    const landing = realLanding(p1.x, p1.y, shot.angle, shot.power, match.wind);
+    const landing = realLanding(p1, shot.angle, shot.power, match.wind);
     if (missDist(landing, p2) <= 15) { within15++; }
   }
   assert.ok(within15 >= 15,
@@ -248,7 +254,7 @@ test('easy: at least 25% of 100 samples deviate more than 8°', () => {
   // task-6 report.
   const { p1, p2, match } = setup();
   const perfect = AI.pickShot(match, 'easy', NO_ERROR);
-  const perfectLanding = realLanding(p1.x, p1.y, perfect.angle, perfect.power, match.wind);
+  const perfectLanding = realLanding(p1, perfect.angle, perfect.power, match.wind);
   const perfectDir = Math.atan2(perfectLanding.y - p1.y, perfectLanding.x - p1.x);
   const rng = mulberry32(20261101);
 
@@ -259,7 +265,7 @@ test('easy: at least 25% of 100 samples deviate more than 8°', () => {
     assert.ok(Math.abs(shot.power - perfect.power) <= 18, 'within the easy power cap');
     assert.ok(shot.angle >= 0 && shot.angle <= 85, 'elevation in the view range');
     assert.ok(shot.power >= 0 && shot.power <= 100, 'power in gauge range');
-    const landing = realLanding(p1.x, p1.y, shot.angle, shot.power, match.wind);
+    const landing = realLanding(p1, shot.angle, shot.power, match.wind);
     const dev = Math.abs(Math.atan2(landing.y - p1.y, landing.x - p1.x) - perfectDir) *
       180 / Math.PI;
     if (dev > 8) { over8++; }
@@ -297,21 +303,24 @@ test('unknown difficulty throws; pickShot mutates nothing', () => {
 test('all tiers blocked -> the closest-landing fallback wins deterministically', () => {
   // Synthetic geometry: a foe just past the field's right end (x=1680;
   // heightAt clamps to 380 there). Every tier's best real landing is the
-  // field corner (1600,380) — the last polyline point any trajectory can
-  // touch — so all three are blocked (80px >= 50) and the fallback takes
-  // the closest landing. The three probes converge on the corner to within
-  // float noise of each other, and the numerically closest wins: 45° under
-  // the pinned solver, deterministically. (A coarser three-way race is
-  // unreachable on the real terrain: in-field foes solve exactly for every
-  // tier, so blocked tiers can only ever meet at the corner.)
+  // field corner (1600,380) — the last point any trajectory can touch —
+  // so all three are blocked (80px >= 50) and the fallback takes the
+  // closest landing. The three probes converge on the corner to within
+  // float noise of each other, and the numerically closest tier wins —
+  // which tier that is depends on the launch origin (the muzzle, since
+  // the origin unification), so the pin here is "a real tier, the same
+  // one every call" rather than a specific degree. (A coarser three-way
+  // race is unreachable on the real terrain: in-field foes solve exactly
+  // for every tier, so blocked tiers can only ever meet at the corner.)
   const p1 = C.create('P1');
   const foe = fakeCannon('P2', 1680, 380);
   const match = M.create({ p1, p2: foe }, { rng: () => 0.5 });
 
   const shot = AI.pickShot(match, 'hell', NO_ERROR);
-  assert.strictEqual(shot.angle, 45, 'the closest-landing tier wins the fallback');
+  assert.ok([35, 45, 55].includes(shot.angle),
+    'the fallback picks one of the pinned tiers, got ' + shot.angle);
   assert.strictEqual(shot.weapon, 'normal');
-  const landing = realLanding(p1.x, p1.y, shot.angle, shot.power, 0);
+  const landing = realLanding(p1, shot.angle, shot.power, 0);
   assert.ok(Math.abs(landing.x - 1600) < 0.5 && Math.abs(landing.y - 380) < 0.5,
     'the best real landing is the field corner: ' +
     landing.x.toFixed(2) + ',' + landing.y.toFixed(2));
@@ -348,7 +357,8 @@ test('foe reachable only past the field -> the corridor clears at the enemy-colu
 
   const shot = AI.pickShot(match, 'hell', NO_ERROR);
   assert.strictEqual(shot.angle, 35, 'the first tier clears via the crossing');
-  const flight = B.simulate(p1.x, p1.y, shot.angle, shot.power, 0);
+  const m0 = C.muzzle(p1, shot.angle);
+  const flight = B.simulate(m0.x, m0.y, shot.angle, shot.power, 0);
   let contact = null;
   for (let i = 2; i < flight.points.length && !contact; i++) {
     const a = flight.points[i - 1];

@@ -167,12 +167,17 @@
      * land(impact) -> lastShot|null — settle the in-flight shell at the
      * impact the caller's flight integration produced (view-side
      * Ballistics + Terrain.hit, per the plan's cross-task ledger).
-     * FLIGHT -> RESOLVE always: even a lethal landing gets the resolve
-     * pause before next() hands out the outcome.
+     * After the damage chain, the ground DEFORMS at every explosion
+     * point (weapons' carve radii — destructible terrain), a heavy
+     * blast shoves each cannon it struck away from the burst, and both
+     * cannons re-seat on the changed surface. FLIGHT -> RESOLVE always:
+     * even a lethal landing gets the resolve pause before next() hands
+     * out the outcome.
      */
     match.land = function (impact) {
       if (match.state !== 'FLIGHT') { return null; }
-      var points = CC.Weapons.explosions(firedWeapon, impact, rng);
+      var boom = CC.Weapons.explosions(firedWeapon, impact, rng, match.wind);
+      var points = boom.points;
       var hits = [];
       var dmg = { P1: 0, P2: 0 };
       for (var i = 0; i < points.length; i++) {
@@ -181,12 +186,24 @@
           settled[j].cannon.onHit(settled[j].dmg);
           dmg[settled[j].cannon.side] += settled[j].dmg;
           hits.push(settled[j]);
+          if (firedWeapon === 'heavy') {
+            // shove the struck cannon away from the burst (dx 0 -> +1:
+            // deterministic, and the final sink re-seats it)
+            settled[j].cannon.knock(settled[j].cannon.x >= points[i].x ? 1 : -1);
+          }
         }
       }
+      var carveR = CC.Weapons.carveRadius(firedWeapon);
+      for (i = 0; i < points.length; i++) {
+        CC.Terrain.carve(points[i].x, points[i].y, carveR);
+      }
+      p1.sink();
+      p2.sink();
       match.lastShot = {
         weapon: firedWeapon,
         impact: { x: impact.x, y: impact.y },
         explosions: points,
+        lobs: boom.lobs, // cluster bomblet flights — the view replays them
         hits: hits,
         dmg: dmg
       };

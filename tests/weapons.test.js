@@ -29,6 +29,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const T = require('../src/core/terrain.js'); // CC.Terrain: cluster children land on it
+require('../src/core/ballistics.js'); // cluster bomblets lob through it (weapons reads CC.Ballistics lazily)
 const W = require('../src/core/weapons.js');
 const C = require('../src/core/cannon.js');
 
@@ -195,48 +196,55 @@ test('explosions: direct shells explode once where they land, rng untouched', ()
   const rng = () => { rngCalls++; return 0.9; };
 
   for (const key of ['normal', 'heavy', 'pierce']) {
-    assert.deepStrictEqual(W.explosions(key, impact, rng), [{ x: 800, y: 300 }], key);
+    const boom = W.explosions(key, impact, rng);
+    assert.deepStrictEqual(boom.points, [{ x: 800, y: 300 }], key);
+    assert.deepStrictEqual(boom.lobs, [], key + ': no sub-flights');
   }
   assert.strictEqual(rngCalls, 0, 'no hidden randomness for direct shells');
 });
 
-test('explosions: cluster is its 3 children only — child 1 lands on the impact (R10)', () => {
-  const impact = { x: 250, y: 400 };
-  const pts = W.explosions('cluster', impact, always(0.9));
+test('explosions: cluster is its 3 children — child 1 falls back onto the impact (R10)', () => {
+  const impact = { x: 250, y: 400 }; // on the left platform surface
+  const boom = W.explosions('cluster', impact, always(0.9));
 
-  assert.strictEqual(pts.length, 3, 'exactly 3 explosions: main impact is child 1, not an extra');
-  assert.deepStrictEqual(pts[0], impact, 'child 1 lands exactly on the main impact');
-  assert.strictEqual(Math.abs(pts[1].x - impact.x), 90, 'child 2 scatters 90px');
-  assert.strictEqual(Math.abs(pts[2].x - impact.x), 180, 'child 3 scatters 180px');
-  assert.deepStrictEqual(pts, [
-    { x: 250, y: 400 }, // offset 0: the impact itself (still on the left platform)
-    { x: 340, y: 400 }, // +90
-    { x: 430, y: 400 }, // +180 (platform end vertex (430,400))
-  ]);
+  assert.strictEqual(boom.points.length, 3, 'exactly 3 explosions: main impact is child 1, not an extra');
+  assert.strictEqual(boom.lobs.length, 3, 'each child carries its flight for the view');
+  assert.deepStrictEqual(boom.points[0], impact,
+    'child 1 launches straight up and lands exactly on the main impact');
+  // children 2/3 burst sideways (+ sides from rng 0.9): downrange and
+  // strictly ordered (120px/s burst lands nearer than 180px/s)
+  assert.ok(boom.points[1].x > impact.x, 'child 2 bursts downrange');
+  assert.ok(boom.points[2].x > boom.points[1].x, 'child 3 bursts farther than child 2');
+  for (let i = 0; i < 3; i++) {
+    assert.strictEqual(boom.lobs[i].impact, boom.points[i], 'child ' + i + ' flight matches its point');
+    assert.deepStrictEqual(boom.lobs[i].points[0], impact, 'child ' + i + ' flight starts at the impact');
+    assert.ok(Math.abs(boom.points[i].y - T.heightAt(boom.points[i].x)) < 1e-9,
+      'child ' + i + ' lands on the ground');
+  }
 
   // rng() < 0.5 flips the scattered children to the negative side.
   const neg = W.explosions('cluster', { x: 350, y: 400 }, always(0.1));
-  assert.deepStrictEqual(neg, [
-    { x: 350, y: 400 }, // child 1: fixed, no side
-    { x: 260, y: 400 }, // -90
-    { x: 170, y: 400 }, // -180 (platform start vertex (170,400))
-  ]);
+  assert.ok(neg.points[1].x < 350 && neg.points[2].x < neg.points[1].x,
+    'negative sides: both burst uprange, child 3 farther');
+  assert.deepStrictEqual(neg.points[0], { x: 350, y: 400 }, 'child 1 still on the impact');
 });
 
 test('explosions: scattered children land ON the terrain, rng drawn only for them', () => {
-  // Mixed sides from the stub [+,-] (child 1 needs no rng). Off the right
-  // platform edge the landing y comes from Terrain.heightAt: child 3 drops
-  // onto the valley slope at x=1085 (heightAt(1085) === 652.5, pinned by
-  // the task-3 tests).
+  // Mixed sides from the stub [+,-] (child 1 needs no rng): every landing
+  // sits exactly on the terrain surface under its own x.
   const impact = { x: 1265, y: 445 };
-  const pts = W.explosions('cluster', impact, signs(0.9, 0.1));
+  const boom = W.explosions('cluster', impact, signs(0.9, 0.1));
 
-  assert.deepStrictEqual(pts.map((p) => p.x), [1265, 1355, 1085], '0 / ±90 / ±180 in child order');
-  assert.strictEqual(pts[0].y, 445, 'child 1 sits on the right platform');
-  assert.strictEqual(pts[1].y, 445, 'child 2 lands back on the right platform');
-  assert.strictEqual(pts[2].y, 652.5, 'child 3 lands on the pinned slope height');
-  for (const p of pts) {
+  assert.strictEqual(boom.points[0].x, 1265, 'child 1 stays put');
+  assert.ok(boom.points[1].x > impact.x, 'child 2 side +');
+  assert.ok(boom.points[2].x < impact.x, 'child 3 side -');
+  for (const p of boom.points) {
     assert.ok(Math.abs(p.y - T.heightAt(p.x)) < 1e-9, 'child lands on the ground at x=' + p.x);
+  }
+  // the burst is a real flight, not a teleport: the children are airborne
+  // (above ground) right after the launch step
+  for (const fl of boom.lobs) {
+    assert.ok(fl.points[1].y < T.heightAt(fl.points[1].x), 'child rises before falling');
   }
 
   let calls = 0;
@@ -248,10 +256,11 @@ test('cluster direct hit on an enemy stance deals its 12 (R10 guarantees contact
   const p1 = C.create('P1');
   const p2 = C.create('P2');
 
-  // Perfect aim at P2's base: child 1 lands exactly on it (dist 0 -> 12);
-  // children 2/3 scatter 90/180px away, outside radius 35 on either side.
+  // Perfect aim at P2's base: child 1 rises and falls back exactly onto
+  // it (dist 0 -> 12); children 2/3 burst 120/180px/s sideways — both
+  // land outside radius 35 on either side.
   let total = 0;
-  for (const pt of W.explosions('cluster', { x: p2.x, y: p2.y }, always(0.1))) {
+  for (const pt of W.explosions('cluster', { x: p2.x, y: p2.y }, always(0.1)).points) {
     for (const h of W.settle('cluster', pt, [p1, p2])) {
       if (h.cannon === p2) { total += h.dmg; }
       h.cannon.onHit(h.dmg);
@@ -273,7 +282,7 @@ test('wiring: a settled blast applied via onHit reduces HP by exactly the settle
 
   // The match-layer flow for one landing: every explosion point of the
   // shell settles against both cannons, each hit applies via onHit.
-  for (const pt of W.explosions('heavy', { x: 1335, y: 445 }, always(0.9))) {
+  for (const pt of W.explosions('heavy', { x: 1335, y: 445 }, always(0.9)).points) {
     for (const h of W.settle('heavy', pt, [p1, p2])) {
       h.cannon.onHit(h.dmg);
     }

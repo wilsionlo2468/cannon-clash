@@ -77,6 +77,26 @@
       for (var key in list) { cannon.ammo[key] = list[key].count; }
     };
 
+    /**
+     * sink() — re-seat the cannon on the (possibly freshly carved)
+     * surface under it. Called after every landing and after any
+     * horizontal move: the stance y is wherever the terrain now is.
+     */
+    cannon.sink = function () {
+      cannon.y = CC.Terrain.heightAt(cannon.x);
+    };
+
+    /**
+     * knock(dir) — heavy-shell shockwave: shove the cannon KNOCKBACK px
+     * horizontally (dir is the unit direction, +1/-1), clamped to the
+     * field, then re-seat it on the surface below the new x.
+     */
+    cannon.knock = function (dir) {
+      var x = cannon.x + (dir >= 0 ? 1 : -1) * KNOCKBACK;
+      cannon.x = x < X_MIN ? X_MIN : x > X_MAX ? X_MAX : x;
+      cannon.sink();
+    };
+
     return cannon;
   }
 
@@ -104,7 +124,22 @@
     };
   }
 
-  CC.Cannon = { create: create, muzzle: muzzle, MUZZLE_LEN: MUZZLE_LEN };
+  // Horizontal knockback: a heavy shell's shockwave shoves a struck
+  // cannon this many px away from the blast (it can be shoved off a
+  // platform edge or into a crater). Kept beside the movement bounds the
+  // knock must respect.
+  var KNOCKBACK = 30;
+  var X_MIN = 80;   // the cannon art is ~164px wide; keep the body
+  var X_MAX = 1520; // inside the 1600px field
+
+  CC.Cannon = {
+    create: create,
+    muzzle: muzzle,
+    MUZZLE_LEN: MUZZLE_LEN,
+    KNOCKBACK: KNOCKBACK,
+    X_MIN: X_MIN,
+    X_MAX: X_MAX
+  };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

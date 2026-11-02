@@ -113,7 +113,49 @@
     return Math.min(100, p);
   }
 
-  CC.Ballistics = { simulate: simulate, solvePower: solvePower, chargePower: chargePower };
+  /**
+   * lob(x0, y0, vx0, vy0, wind) -> {points, impact}
+   * Integrates a launch by RAW VELOCITY (not angle/power) — cluster
+   * bomblets bursting out of the parent impact. Same integration as
+   * simulate, but the flight ends at the FIRST REAL terrain contact
+   * (Terrain.hit per step, read lazily so module load order is free);
+   * the contact point is the exact impact and replaces the last sample.
+   * points[0] is the launch point. The FIRST movement segment is not
+   * checked — the bomblet launches from a point ON the surface and that
+   * segment only carries it clear of the ground (the same skip-segment-0
+   * convention the AI's corridor uses for a muzzle resting on its
+   * platform). Used by Weapons.explosions for the children's landings
+   * AND by the view to replay the same paths.
+   */
+  function lob(x0, y0, vx0, vy0, wind) {
+    var x = x0;
+    var y = y0;
+    var vx = vx0;
+    var vy = vy0;
+    var points = [{ x: x, y: y }];
+    var impact = null;
+    for (var i = 0; i < MAX_STEPS; i++) {
+      var px = x;
+      var py = y;
+      x += vx * DT;
+      y += vy * DT;
+      vy += G * DT;
+      vx += WIND_K * wind * DT;
+      if (i > 0) { // segment 0: the launch step off the surface
+        var h = CC.Terrain.hit(px, py, x, y);
+        if (h) {
+          points.push(h);
+          impact = h;
+          break;
+        }
+      }
+      points.push({ x: x, y: y });
+      if (y >= IMPACT_Y) { impact = { x: x, y: y }; break; } // defensive
+    }
+    return { points: points, impact: impact };
+  }
+
+  CC.Ballistics = { simulate: simulate, solvePower: solvePower, chargePower: chargePower, lob: lob };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

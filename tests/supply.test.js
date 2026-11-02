@@ -36,6 +36,7 @@ const assert = require('node:assert');
 // Same order as index.html: supply reads CC.Terrain.heightAt at spawn
 // time; weapons/cannon/match back the real refill and match shapes.
 const T = require('../src/core/terrain.js');
+require('../src/core/ballistics.js'); // cluster bomblets lob through it (weapons reads CC.Ballistics lazily)
 const W = require('../src/core/weapons.js');
 const C = require('../src/core/cannon.js');
 const M = require('../src/core/match.js');
@@ -45,6 +46,7 @@ const S = require('../src/core/supply.js');
 // maybeSpawn only READS match.round (driving real rounds here would retest
 // the match machine, already covered by match.test.js).
 const setup = (round) => {
+  T.reset(); // the destructible heightfield is a singleton: pristine per case
   const p1 = C.create('P1'); // (250, 400)
   const p2 = C.create('P2'); // (1300, 445)
   const match = M.create({ p1, p2 }, { rng: () => 0.5 });
@@ -210,19 +212,22 @@ test('pickup: a scattered cluster child can claim the crate (lastShot.explosions
   const { match, crate } = setupWithCrate();
 
   // Direct impact 80px short of the crate, on the terrain: cluster child
-  // 1 misses (81.6px out), child 2 scatters +90 onto (860, 880) — 10.2px
-  // from the crate — and claims it; child 3 (+180) is 100px out.
+  // 1 misses (81px out), but the +120px/s bomblet bursts downrange along
+  // the falling slope and lands ~31px from the crate — inside the 40px
+  // reach — and claims it.
   const impact = { x: 770, y: T.heightAt(770) }; // (770, 862)
-  const points = W.explosions('cluster', impact, seq(0.9, 0.1)); // children +90/+180
-  assert.strictEqual(points[1].x, 860, 'child 2 scatters onto the crate');
-  assert.strictEqual(S.pickup(match, 'P1', points), true);
+  const boom = W.explosions('cluster', impact, seq(0.9, 0.1)); // children +/-
+  assert.ok(Math.abs(boom.points[1].x - crate.x) < 40,
+    'the scattered child lands within the crate reach, got ' + boom.points[1].x);
+  assert.strictEqual(S.pickup(match, 'P1', boom.points), true);
   assert.strictEqual(match.crate, null);
 
-  // And a shot whose every explosion point stays outside: impact 41px
-  // past the crate, children further out — no pickup.
+  // And a shot whose every explosion point stays outside: a direct hit on
+  // the right platform — the children burst within ~65px of it, hundreds
+  // of px from the crate — no pickup.
   const far = setupWithCrate();
-  const impact2 = { x: 891, y: T.heightAt(891) };
-  assert.strictEqual(S.pickup(far.match, 'P1', W.explosions('cluster', impact2, seq(0.9, 0.1))),
+  const impact2 = { x: 1300, y: T.heightAt(1300) };
+  assert.strictEqual(S.pickup(far.match, 'P1', W.explosions('cluster', impact2, seq(0.9, 0.1)).points),
     false, 'all three children outside the 40px reach');
   assert.strictEqual(far.match.crate, far.crate, 'the crate survives the far blast');
 });

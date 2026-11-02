@@ -16,15 +16,24 @@
     cluster: { name: '集束彈', dmg: 12, count: 1,        radius: 35, children: 3 }
   };
 
-  // Cluster scatter offsets, pinned by controller ruling R10: child 1
-  // lands exactly on the main impact (offset 0 — a direct hit always
-  // connects), children 2 and 3 land at impact.x ± SPREAD[i] with the
-  // side drawn from rng(). Cluster does not detonate at its own impact —
-  // the brief's settlement clause covers only the three children — so
-  // the children are the cluster's entire damage delivery (dmg12/radius35
-  // unchanged by R10). Kept off LIST: the brief pins the LIST literal
-  // verbatim.
-  var SPREAD = [0, 90, 180];
+  // Cluster bomblets: bursting out of the parent impact with raw velocity
+  // (Ballistics.lob). Launch speeds per child mirror the old scatter's
+  // [0, 90, 180] shape: child 1 launches STRAIGHT UP (vx 0) — it rises
+  // and falls back onto the impact point, preserving controller ruling
+  // R10's "a direct hit always connects"; children 2/3 launch sideways
+  // at 120 / 180 px/s with the side drawn from rng() (one call each —
+  // the same two draws the old scatter used). Cluster does not detonate
+  // at its own impact — the brief's settlement clause covers only the
+  // three children — so the children are the cluster's entire damage
+  // delivery (dmg12/radius35 unchanged by R10).
+  var CLUSTER_VX = [0, 120, 180];
+  var CLUSTER_VY = -160;
+
+  // Crater radius per weapon (D1: the ground deforms where shells land).
+  // Deliberately NOT on LIST — the brief pins the LIST literal verbatim —
+  // and not the blast radius: piercing shells gouge a narrow hole (22)
+  // while heavy shells shovel out a wide one (85).
+  var CARVE_R = { normal: 45, heavy: 85, pierce: 22, cluster: 18 };
 
   function weapon(key) {
     var w = LIST[key];
@@ -32,28 +41,41 @@
     return w;
   }
 
+  function carveRadius(key) {
+    weapon(key); // unknown keys throw the standard error
+    return CARVE_R[key];
+  }
+
   /**
-   * explosions(key, impact, rng) -> [{x, y}, ...]
+   * explosions(key, impact, rng, wind) -> {points, lobs}
    * Every explosion point a shell of `key` produces when it lands at
-   * `impact`: the impact itself for normal/heavy/pierce; for cluster the
-   * three children — child 1 exactly on the impact (no rng), children
-   * 2/3 at impact.x ± 90/± 180 with the side drawn from rng() (one call
-   * each), landing y = Terrain.heightAt(x) — the main impact being only
-   * the scatter origin (R10). rng is a () -> [0,1) source (Math.random
-   * in play); injected so tests pin the sides deterministically.
-   * Needs CC.Terrain (loaded first per index.html order).
+   * `impact`, plus the flights that delivered them:
+   *   normal/heavy/pierce -> points [impact], lobs [] (the shell's own
+   *     flight is the view's business).
+   *   cluster -> the three bomblets. Each is launched from the impact and
+   *     integrated to its FIRST REAL terrain contact (Ballistics.lob —
+   *     wind applies): child 1 straight up, back onto the impact (R10);
+   *     children 2/3 sideways at ±CLUSTER_VX with the side drawn from
+   *     rng() (one call each). points[i] is lobs[i].impact. rng is a
+   *     () -> [0,1) source (Math.random in play); injectable so tests
+   *     pin the sides deterministically.
+   * Needs CC.Terrain + CC.Ballistics (loaded first per index.html order).
    */
-  function explosions(key, impact, rng) {
+  function explosions(key, impact, rng, wind) {
     var w = weapon(key);
-    if (!w.children) { return [{ x: impact.x, y: impact.y }]; }
-    var points = [];
-    for (var i = 0; i < w.children; i++) {
-      var off = SPREAD[i];
-      var x = impact.x;
-      if (off !== 0) { x += (rng() < 0.5 ? -1 : 1) * off; } // offset 0: fixed, no rng
-      points.push({ x: x, y: CC.Terrain.heightAt(x) });
+    if (!w.children) {
+      return { points: [{ x: impact.x, y: impact.y }], lobs: [] };
     }
-    return points;
+    var points = [];
+    var lobs = [];
+    for (var i = 0; i < w.children; i++) {
+      var speed = CLUSTER_VX[i];
+      var vx = i > 0 ? (rng() < 0.5 ? -1 : 1) * speed : speed; // child 1: fixed, no rng
+      var flight = CC.Ballistics.lob(impact.x, impact.y, vx, CLUSTER_VY, wind || 0);
+      points.push(flight.impact);
+      lobs.push(flight);
+    }
+    return { points: points, lobs: lobs };
   }
 
   /**
@@ -82,7 +104,7 @@
     return hits;
   }
 
-  CC.Weapons = { LIST: LIST, explosions: explosions, settle: settle };
+  CC.Weapons = { LIST: LIST, explosions: explosions, settle: settle, carveRadius: carveRadius };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

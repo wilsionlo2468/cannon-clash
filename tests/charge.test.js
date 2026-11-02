@@ -25,6 +25,7 @@ const C = require('../src/core/cannon.js');
 const M = require('../src/core/match.js');
 
 const setup = (opts) => {
+  T.reset(); // the destructible heightfield is a singleton: pristine per case
   const p1 = C.create('P1');
   const p2 = C.create('P2');
   return { p1, p2, match: M.create({ p1, p2 }, opts) };

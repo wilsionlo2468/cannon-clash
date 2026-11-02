@@ -41,12 +41,14 @@ const assert = require('node:assert');
 // (Cannon.create reads CC.Weapons.LIST; Match.land reads CC.Weapons lazily).
 const T = require('../src/core/terrain.js'); // cluster children land on it
 require('../src/core/weapons.js');           // load-order only, no direct use
+require('../src/core/ballistics.js');    // cluster bomblets lob through it (weapons reads CC.Ballistics lazily)
 const C = require('../src/core/cannon.js');
 const M = require('../src/core/match.js');
 
 // Fresh cannons + match per case: the machine mutates them in place and
 // the caller (here: the test) keeps the references.
 const setup = (opts) => {
+  T.reset(); // the destructible heightfield is a singleton: pristine per case
   const p1 = C.create('P1'); // (250, 400)
   const p2 = C.create('P2'); // (1300, 445)
   return { p1, p2, match: M.create({ p1, p2 }, opts) };
@@ -265,11 +267,13 @@ test('land passes the injected rng to the cluster scatter (one draw per scattere
   p1.weapon = 'cluster';
   assert.strictEqual(match.fire(), 'cluster');
   const shot = match.land({ x: p2.x, y: p2.y });
-  assert.deepStrictEqual(shot.explosions.map((p) => p.x), [1300, 1390, 1120],
-    'child 1 on the impact (R10), children 2/3 at +90/-180 from the pinned sides');
-  for (const p of shot.explosions) {
-    assert.strictEqual(p.y, T.heightAt(p.x), 'children land on the terrain');
-  }
+  assert.strictEqual(shot.explosions[0].x, 1300,
+    'child 1 rises and falls back exactly onto the impact (R10)');
+  assert.ok(shot.explosions[1].x > 1300, 'sides +: child 2 bursts downrange');
+  assert.ok(shot.explosions[2].x < 1300, 'sides -: child 3 bursts uprange');
+  // (the bomblets land ON the terrain by construction — Ballistics.lob
+  // ends at the first real contact; asserting heightAt here would read
+  // the surface AFTER land()'s own carve has already deformed it)
   assert.deepStrictEqual(shot.dmg, { P1: 0, P2: 12 }, 'only child 1 connects');
   assert.strictEqual(p2.hp, 0);
   assert.strictEqual(match.next(), 'OVER', 'the 12 was lethal');

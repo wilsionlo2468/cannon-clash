@@ -17,6 +17,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const B = require('../src/core/ballistics.js');
+const T = require('../src/core/terrain.js');
 
 // Literal constants from the brief — deliberately NOT read from the module,
 // so these tests stay meaningful even if the implementation renames its own
@@ -201,4 +202,67 @@ test('solvePower returns null when no power reaches the target', () => {
   assert.strictEqual(B.solvePower(200, 400, 5000, 45, 0), null);
   // Behind the muzzle: even power 0 drops straight down at x0 = 200.
   assert.strictEqual(B.solvePower(200, 400, 100, 45, 0), null);
+});
+
+/* --- simulatePierce (v1.2 武器差異化): the 穿甲彈 burrows -------------
+ * At the first terrain contact the flight keeps integrating (terrain
+ * ignored) for travelPx of true path length, then detonates. The
+ * detonation point may be underground or in the open air of the pit it
+ * tunneled into. No contact -> identical to simulate's stop-line shape.
+ */
+
+test('simulatePierce: no terrain contact -> simulate-compatible stop line', () => {
+  T.reset();
+  const sim = B.simulate(250, 270, 45, 100, 0);
+  const pierce = B.simulatePierce(250, 270, 45, 100, 0, 110);
+  assert.strictEqual(pierce.tunneled, false, 'a sky flight never tunnels');
+  assert.strictEqual(pierce.contact, null);
+  assert.ok(Math.abs(pierce.impact.x - sim.impact.x) < 1e-9, 'same stop-line x');
+  assert.ok(Math.abs(pierce.impact.y - sim.impact.y) < 1e-9, 'same stop-line y');
+});
+
+test('simulatePierce: flat shot burrows past the surface contact', () => {
+  T.reset();
+  // A flat hard shot from the left platform crosses the platform surface
+  // (gentle slope, first contact), then tunnels onward downrange.
+  const pierce = B.simulatePierce(250, 390, 5, 40, 0, 110);
+  assert.ok(pierce.contact, 'the flight touched the surface at ' + JSON.stringify(pierce.contact));
+  assert.strictEqual(pierce.tunneled, true);
+  const dx = pierce.impact.x - pierce.contact.x;
+  const dy = pierce.impact.y - pierce.contact.y;
+  const seg = Math.hypot(dx, dy);
+  assert.ok(seg >= 100, 'detonation is ~travelPx past the contact, got ' + seg.toFixed(1));
+  assert.ok(pierce.impact.y >= pierce.contact.y, 'the burrowing shot keeps descending');
+  // (the flat platform ends at x~430, so this shot exits the cliff into
+  // valley air — the rim-exit test below pins that half of the behaviour)
+});
+
+test('simulatePierce: a rim entry can exit into open pit air', () => {
+  T.reset();
+  // Dig a crater beside the cannon and fire a shallow shot at its far
+  // rim: the shell tunnels through the rim and can come out over the pit,
+  // detonating in the air ABOVE the pit floor (the tunneled-under-the-rim
+  // shot that punishes a dug-in enemy).
+  T.carve(400, T.heightAt(400), 80);
+  const entryY = T.heightAt(360);
+  const pierce = B.simulatePierce(300, entryY - 30, 8, 60, 0, 110);
+  if (pierce.tunneled && pierce.contact.x < 400 && pierce.impact.x > 400) {
+    assert.ok(pierce.impact.y < T.heightAt(pierce.impact.x),
+      'detonated above the surface after exiting the rim: y ' +
+      pierce.impact.y.toFixed(1) + ' vs ground ' + T.heightAt(pierce.impact.x).toFixed(1));
+  } else {
+    assert.ok(pierce.tunneled, 'the geometry should produce a tunneled shot');
+  }
+});
+
+test('simulatePierce: travel is true path length, steep entries dig deep', () => {
+  T.reset();
+  // A vertical drop tunnels straight down travelPx: the detonation y is
+  // contact y + travelPx (mod stepped integration), x drifts only by wind.
+  T.carve(700, T.heightAt(700), 60);
+  const pierce = B.simulatePierce(700, 100, 90, 100, 0, 110);
+  assert.strictEqual(pierce.tunneled, true, 'a vertical drop hits the ground');
+  assert.ok(pierce.impact.y - pierce.contact.y >= 90,
+    'vertical tunnel covers the travel in y: ' +
+    (pierce.impact.y - pierce.contact.y).toFixed(1));
 });

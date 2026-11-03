@@ -166,11 +166,73 @@
     return { points: points, impact: impact };
   }
 
+  /**
+   * simulatePierce(x0, y0, angleDeg, power, wind, travelPx) ->
+   *   {points, impact, contact, tunneled}
+   * The 穿甲彈 flight: integrates exactly like simulate, but at the FIRST
+   * terrain contact it does not stop — the round burrows on along its live
+   * velocity (gravity and wind keep acting, terrain is ignored) for
+   * travelPx more px of PATH LENGTH, then detonates. The detonation point
+   * is `impact`; it can sit underground (the punish-a-dug-in-enemy shot)
+   * or back in the open air of a pit the shell tunneled into (the way out
+   * of a shallow entry through a crater rim). `contact` is the surface
+   * crossing; `tunneled` is false and contact null when the flight never
+   * touched terrain (impact then is the same y=1500 stop-line crossing
+   * simulate produces, so callers can treat both shapes uniformly).
+   * Path length accumulates the true per-step |v|*dt, so 110px means 110px
+   * of travel regardless of how steep the entry was.
+   */
+  function simulatePierce(x0, y0, angleDeg, power, wind, travelPx) {
+    var rad = angleDeg * Math.PI / 180;
+    var v0 = power * V0_PER_POWER;
+    var wk = WIND_K * (WEAPON_WIND_K.pierce || 1);
+    var x = x0;
+    var y = y0;
+    var vx = v0 * Math.cos(rad);
+    var vy = -v0 * Math.sin(rad);
+    var points = [{ x: x, y: y }];
+    var contact = null;
+    var tunnelled = 0;
+    for (var i = 0; i < MAX_STEPS; i++) {
+      var px = x;
+      var py = y;
+      x += vx * DT;
+      y += vy * DT;
+      vy += G * DT;
+      vx += wk * wind * DT;
+      points.push({ x: x, y: y });
+      if (contact) {
+        // burrowing: no terrain checks, accumulate path length
+        tunnelled += Math.sqrt((x - px) * (x - px) + (y - py) * (y - py));
+        if (tunnelled >= travelPx || y >= IMPACT_Y) {
+          return { points: points, impact: { x: x, y: y }, contact: contact, tunneled: true };
+        }
+      } else {
+        var h = CC.Terrain.hit(px, py, x, y);
+        if (h && i > 0) { // segment 0: the muzzle rests on its platform
+          contact = h;
+        } else if (y >= IMPACT_Y) {
+          var span = y - py;
+          var f = span > 0 ? (IMPACT_Y - py) / span : 0;
+          if (f < 0) { f = 0; }
+          return {
+            points: points,
+            impact: { x: px + (x - px) * f, y: py + (y - py) * f },
+            contact: null,
+            tunneled: false
+          };
+        }
+      }
+    }
+    return { points: points, impact: { x: x, y: y }, contact: contact, tunneled: !!contact };
+  }
+
   CC.Ballistics = {
     simulate: simulate,
     solvePower: solvePower,
     chargePower: chargePower,
     lob: lob,
+    simulatePierce: simulatePierce,
     WEAPON_WIND_K: WEAPON_WIND_K
   };
 

@@ -7,7 +7,7 @@
  *   W.LIST — key order is the task-11 "W" rotation order:
  *     normal:  {name:'普通彈', dmg:20, count:Infinity, radius:50}
  *     heavy:   {name:'重錘彈', dmg:45, count:2,        radius:70}
- *     pierce:  {name:'穿甲彈', dmg:15, count:3,        radius:40}
+ *     pierce:  {name:'穿甲彈', dmg:25, count:3,        radius:40}  (v1.2: 15->25)
  *     cluster: {name:'集束彈', dmg:12, count:1,        radius:35, children:3}
  *   settlement: explosion point within a cannon center's radius
  *     (dist < radius) -> dmg = dmg * (1 - dist/radius), linear falloff,
@@ -39,7 +39,7 @@ const C = require('../src/core/cannon.js');
 const LIST = {
   normal:  { name: '普通彈', dmg: 20, count: Infinity, radius: 50 },
   heavy:   { name: '重錘彈', dmg: 45, count: 2,        radius: 70 },
-  pierce:  { name: '穿甲彈', dmg: 15, count: 3,        radius: 40 },
+  pierce:  { name: '穿甲彈', dmg: 25, count: 3,        radius: 40 },
   cluster: { name: '集束彈', dmg: 12, count: 1,        radius: 35, children: 3 },
 };
 
@@ -154,11 +154,11 @@ test('settle: full damage at the center, linear falloff, rounded', () => {
 
   // Pinned falloff midpoints, hand-computed on the flat platform tops:
   //   normal  25px of 50  : 20 * (1 - 25/50)  = 10
-  //   pierce  10px of 40  : 15 * (1 - 10/40)  = 11.25 -> 11
+  //   pierce  10px of 40  : 25 * (1 - 10/40)  = 18.75 -> 19  (v1.2)
   //   heavy   35px of 70  : 45 * (1 - 35/70)  = 22.5  -> 23 (四捨五入)
   //   cluster 17.5px of 35: 12 * (1 - 17.5/35) = 6
   assert.deepStrictEqual(W.settle('normal', { x: 275, y: 400 }, [p1]), [{ cannon: p1, dmg: 10 }]);
-  assert.deepStrictEqual(W.settle('pierce', { x: 260, y: 400 }, [p1]), [{ cannon: p1, dmg: 11 }]);
+  assert.deepStrictEqual(W.settle('pierce', { x: 260, y: 400 }, [p1]), [{ cannon: p1, dmg: 19 }]);
   assert.deepStrictEqual(W.settle('heavy', { x: 1335, y: 445 }, [p2]), [{ cannon: p2, dmg: 23 }]);
   assert.deepStrictEqual(W.settle('cluster', { x: 267.5, y: 400 }, [p1]), [{ cannon: p1, dmg: 6 }]);
 });
@@ -257,7 +257,7 @@ test('cluster direct hit on an enemy stance deals its 12 (R10 guarantees contact
   const p2 = C.create('P2');
 
   // Perfect aim at P2's base: child 1 rises and falls back exactly onto
-  // it (dist 0 -> 12); children 2/3 burst 120/180px/s sideways — both
+  // it (dist 0 -> 12); children 2/3 burst 150/240px/s sideways — both
   // land outside radius 35 on either side.
   let total = 0;
   for (const pt of W.explosions('cluster', { x: p2.x, y: p2.y }, always(0.1)).points) {

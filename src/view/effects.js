@@ -122,13 +122,17 @@
   }
 
   /**
-   * lastShot(ctx, points, impact) — aim assist option B: the previous
-   * shot's trajectory as a dashed line plus a diamond marker on the landing
-   * point. No live prediction arc. points is the flight sample list
-   * (CC.Ballistics.simulate, truncated at the terrain hit by the caller);
-   * impact may be null (then only the trail draws).
+   * lastShot(ctx, points, impact, rings) — aim assist option B: the
+   * previous shot's trajectory as a dashed line plus a diamond marker on
+   * the landing point. No live prediction arc. points is the flight sample
+   * list (CC.Ballistics.simulate, truncated at the terrain hit by the
+   * caller); impact may be null (then only the trail draws). rings
+   * (v1.2 交互加分項) is an optional [{x, y, r}] list of damage-radius
+   * circles — the weapon's settle radius at each explosion point — so the
+   * correction loop reads "how far inside/outside the kill zone did that
+   * land" at a glance.
    */
-  function lastShot(ctx, points, impact) {
+  function lastShot(ctx, points, impact, rings) {
     if (!points || points.length < 2) { return; }
     var stride = Math.max(1, Math.ceil((points.length - 1) / TRAIL_MAX_SEGMENTS));
     ctx.save();
@@ -156,6 +160,17 @@
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
       ctx.lineWidth = 1.5;
       ctx.stroke();
+    }
+    if (rings) {
+      ctx.strokeStyle = 'rgba(255, 120, 90, 0.55)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 8]);
+      for (var r = 0; r < rings.length; r++) {
+        ctx.beginPath();
+        ctx.arc(rings[r].x, rings[r].y, rings[r].r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
     }
     ctx.restore();
   }

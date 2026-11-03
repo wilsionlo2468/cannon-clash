@@ -310,22 +310,34 @@
     // core origin (CC.Cannon.muzzle; the AI solver uses the same point,
     // so shots land where the solution aimed) — and truncate at the first
     // real terrain contact (Terrain.hit per segment), keeping the samples.
+    // The 穿甲彈 is the exception: simulatePierce burrows travelPx past
+    // that contact and detonates there, points already carrying the
+    // underground leg for the trail to draw.
     function launchFlight(snap) {
       var c = sideCannon(snap.side);
       var m = CC.Cannon.muzzle(c);
-      var sim = CC.Ballistics.simulate(m.x, m.y, snap.side === 'P2' ? 180 - c.angle : c.angle, c.power, match.wind, snap.weapon);
-      var points = sim.points;
-      var impact = null;
-      for (var i = 1; i < points.length; i++) {
-        var hit = CC.Terrain.hit(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y);
-        if (hit) {
-          impact = hit;
-          points = points.slice(0, i);
-          points.push(hit);
-          break;
-        }
+      var sim;
+      if (snap.weapon === 'pierce') {
+        sim = CC.Ballistics.simulatePierce(
+          m.x, m.y, snap.side === 'P2' ? 180 - c.angle : c.angle, c.power,
+          match.wind, CC.Weapons.PENETRATE_PX);
+      } else {
+        sim = CC.Ballistics.simulate(m.x, m.y, snap.side === 'P2' ? 180 - c.angle : c.angle, c.power, match.wind, snap.weapon);
       }
-      if (!impact) { impact = sim.impact || points[points.length - 1]; }
+      var points = sim.points;
+      var impact = sim.impact;
+      if (!sim.tunneled) {
+        for (var i = 1; i < points.length; i++) {
+          var hit = CC.Terrain.hit(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y);
+          if (hit) {
+            impact = hit;
+            points = points.slice(0, i);
+            points.push(hit);
+            break;
+          }
+        }
+        if (!impact) { impact = sim.impact || points[points.length - 1]; }
+      }
       b.flashes.push({ x: m.x, y: m.y, t0: S.t });
       b.flight = {
         points: points,
@@ -333,7 +345,8 @@
         t0: S.t,
         dur: (points.length - 1) * STEP,
         type: snap.weapon,
-        by: snap.side
+        by: snap.side,
+        tunneled: !!sim.tunneled
       };
       b.trail = null; // the old trail retires when a new shell flies
       b.moveAnim = null; // a launch mid-move snaps the moving clone down
@@ -347,12 +360,18 @@
       b.blasts.push({ x: impact.x, y: impact.y, t0: S.t });
       b.craters.push({ x: impact.x, y: impact.y });
       var by = b.flight.by;
-      b.trail = { points: b.flight.points, impact: impact };
+      b.trail = {
+        points: b.flight.points,
+        impact: impact,
+        weapon: b.flight.type, // the trail's damage-radius rings read this
+        explosions: null
+      };
       b.flight = null;
       CC.Audio.play('explosion');
       CC.Audio.whistleStop();
       var last = match.land(impact); // core settles damage, sets RESOLVE
       if (last) {
+        b.trail.explosions = last.explosions; // cluster: ring each bomblet
         CC.Supply.pickup(match, by, last.explosions);
         // impact response: camera punch+shake by the damage, hit feedback
         // on every cannon the blast actually connected with
@@ -701,7 +720,22 @@
         ctx.drawImage(imgs.vfxFlash, fl.x - w / 2, fl.y - w / 2, w, w);
         ctx.restore();
       }
-      if (b.trail) { CC.Effects.lastShot(ctx, b.trail.points, b.trail.impact); }
+      if (b.trail) {
+        // damage-radius rings: the weapon's settle radius at every
+        // explosion point (cluster rings each bomblet, shells ring the
+        // impact — v1.2 交互加分項)
+        var tw = CC.Weapons.LIST[b.trail.weapon];
+        var rings = null;
+        if (tw && tw.children && b.trail.explosions) {
+          rings = [];
+          for (var ri = 0; ri < b.trail.explosions.length; ri++) {
+            rings.push({ x: b.trail.explosions[ri].x, y: b.trail.explosions[ri].y, r: tw.radius });
+          }
+        } else if (tw) {
+          rings = [{ x: b.trail.impact.x, y: b.trail.impact.y, r: tw.radius }];
+        }
+        CC.Effects.lastShot(ctx, b.trail.points, b.trail.impact, rings);
+      }
       // hit feedback: white bursts + floating damage numbers
       for (i = b.hitFlashes.length - 1; i >= 0; i--) {
         var hf = b.hitFlashes[i];

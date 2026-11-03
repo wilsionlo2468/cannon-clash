@@ -12,22 +12,32 @@
   var LIST = {
     normal:  { name: '普通彈', dmg: 20, count: Infinity, radius: 50 },
     heavy:   { name: '重錘彈', dmg: 45, count: 2,        radius: 70 },
-    pierce:  { name: '穿甲彈', dmg: 15, count: 3,        radius: 40 },
+    pierce:  { name: '穿甲彈', dmg: 25, count: 3,        radius: 40 },
     cluster: { name: '集束彈', dmg: 12, count: 1,        radius: 35, children: 3 }
   };
 
+  // 穿甲彈 penetration: past the first terrain contact the round burrows
+  // on (Ballistics.simulatePierce) this many px of path length before
+  // detonating — the punish-a-dug-in-enemy shot that reaches through
+  // crater rims and ridge walls. v1.2: pierce's dmg moved 15->25 alongside
+  // (it was below normal's 20 — a niche shell nobody had a reason to fire;
+  // now it is the precision punish tool at 3x25 potential).
+  var PENETRATE_PX = 110;
+
   // Cluster bomblets: bursting out of the parent impact with raw velocity
-  // (Ballistics.lob). Launch speeds per child mirror the old scatter's
-  // [0, 90, 180] shape: child 1 launches STRAIGHT UP (vx 0) — it rises
-  // and falls back onto the impact point, preserving controller ruling
-  // R10's "a direct hit always connects"; children 2/3 launch sideways
-  // at 120 / 180 px/s with the side drawn from rng() (one call each —
-  // the same two draws the old scatter used). Cluster does not detonate
-  // at its own impact — the brief's settlement clause covers only the
-  // three children — so the children are the cluster's entire damage
-  // delivery (dmg12/radius35 unchanged by R10).
-  var CLUSTER_VX = [0, 120, 180];
-  var CLUSTER_VY = -160;
+  // (Ballistics.lob). v1.2 spread: [0, 150, 240] px/s lateral with the
+  // pop raised to -190 (was [0, 120, 180] / -160) — the higher arc carries
+  // the scattered children over ridge walls and crater rims (~130px reach
+  // instead of ~64), making 集束彈 the anti-cover shell: it rains over
+  // exactly the obstacles the 穿甲彈 tunnels through. Child 1 still
+  // launches STRAIGHT UP (vx 0) — it rises and falls back onto the impact
+  // point, preserving controller ruling R10's "a direct hit always
+  // connects"; children 2/3 launch sideways with the side drawn from rng()
+  // (one call each). Cluster does not detonate at its own impact — the
+  // brief's settlement clause covers only the three children — so the
+  // children are the cluster's entire damage delivery (dmg12/radius35).
+  var CLUSTER_VX = [0, 150, 240];
+  var CLUSTER_VY = -190;
 
   // Crater radius per weapon (D1: the ground deforms where shells land).
   // Deliberately NOT on LIST — the brief pins the LIST literal verbatim —
@@ -104,7 +114,13 @@
     return hits;
   }
 
-  CC.Weapons = { LIST: LIST, explosions: explosions, settle: settle, carveRadius: carveRadius };
+  CC.Weapons = {
+    LIST: LIST,
+    explosions: explosions,
+    settle: settle,
+    carveRadius: carveRadius,
+    PENETRATE_PX: PENETRATE_PX
+  };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

@@ -1,5 +1,7 @@
 # CANNON CLASH 砲台對轟
 
+**▶ 線上遊玩：<https://wilsionlo2468.github.io/cannon-clash/>**
+
 雙人對戰的砲台對轟網頁小遊戲（綫下活動用試驗項目）。純 HTML5 Canvas + 原生 JavaScript，無建置步驟、無外部依賴、完全離綫可玩。
 
 ## 執行

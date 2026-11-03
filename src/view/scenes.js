@@ -727,6 +727,19 @@
       ctx.fillStyle = 'rgba(8, 10, 16, 0.62)';
       ctx.fillRect(0, 0, W, H);
       ctx.restore();
+      // result card: the red panel art behind the text (natural aspect,
+      // centred), with the winner's gold medal pinned over its top edge
+      var panel = S.imgs ? S.imgs.panelRed : null;
+      if (panel) {
+        var pw = 560;
+        var ph = pw * panel.height / panel.width;
+        ctx.drawImage(panel, W / 2 - pw / 2, H / 2 - ph / 2 - 6, pw, ph);
+      }
+      var gold = S.imgs ? S.imgs.medalGold : null;
+      if (gold) {
+        var mw = 110;
+        ctx.drawImage(gold, W / 2 - mw / 2, H / 2 - 160 - mw / 2, mw, mw * gold.height / gold.width);
+      }
       label(ctx, st.text, W / 2, H / 2 - 60, FONT_TITLE, MENU_HI);
       label(ctx, '本局回合數：' + st.params.rounds, W / 2, H / 2, FONT_ITEM, '#e8ecf2');
       label(ctx, st.streakText, W / 2, H / 2 + 44, FONT_ITEM, '#e8ecf2');
@@ -769,6 +782,9 @@
         { title: '連勝榜', list: CC.Leaderboard.top('streaks', 8) },
         { title: '地獄通關（回合數少者勝）', list: CC.Leaderboard.top('hell', 8) }
       ];
+      var medalImgs = [S.imgs ? S.imgs.medalGold : null,
+                       S.imgs ? S.imgs.medalSilver : null,
+                       S.imgs ? S.imgs.medalBronze : null];
       for (var c = 0; c < 2; c++) {
         var x = W / 2 + (c === 0 ? -260 : 260);
         label(ctx, cols[c].title, x, 210, FONT_ITEM, MENU_HI);
@@ -777,6 +793,13 @@
           var e = list[i];
           var text = e ? (i + 1) + '. ' + e.name + ' — ' + e.score : (i + 1) + '. ---';
           var medal = i === 0 ? '#ffd76a' : i === 1 ? '#cfd6de' : i === 2 ? '#d09a62' : MENU_LO;
+          // top-3 rows get the actual medal art hugging the text's left edge
+          if (medalImgs[i]) {
+            ctx.font = FONT_HINT;
+            var tw = ctx.measureText(text).width;
+            var ms = 26;
+            ctx.drawImage(medalImgs[i], x - tw / 2 - ms - 10, 260 + i * 40 - ms + 4, ms, ms * medalImgs[i].height / medalImgs[i].width);
+          }
           label(ctx, text, x, 260 + i * 40, FONT_HINT, medal);
         }
       }

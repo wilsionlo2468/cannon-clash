@@ -5,30 +5,44 @@
   var CC = (root.CC = root.CC || {});
 
   // ---------------------------------------------------------------- *
-  // Health bar (healthbarRed): the frame band and the orange fill strip
-  // live in ONE 512x512 image ("框+填充在同一張圖"); regions below are
-  // measured from the PNG's alpha channel. Two asset facts drove the
-  // numbers: the frame's interior window is a fully transparent cavity
-  // (background removal keyed it out), and the fill strip's dark left
-  // tail was eaten by the same pass — so the fill is cropped from where
-  // the art is still opaque. A dark track rect is painted into the
-  // cavity first, then the HP-cropped fill, then the frame over both so
-  // its inner bezel overlaps the fill edges. Fill length = HP%
-  // (left-anchored for P1; the P2 draw is mirrored, so both drain
-  // outward toward the screen edges).
-  var HB_FRAME = { x: 26, y: 126, w: 460, h: 154 };
-  var HB_WINDOW = { x: 97, y: 54, w: 330, h: 41 };  // cavity, frame-local
-  var HB_FILL = { x: 219, y: 317, w: 177, h: 53 };  // opaque orange run of the strip
-  var BAR_W = 360;        // display width of the frame; height keeps aspect
+  // Health bars — per-side geometry sets. Each set describes ONE image
+  // pipeline: a dark track is painted into the frame's window cavity,
+  // the HP-cropped fill maps onto that window (fill length = HP%,
+  // left-anchored; the P2 draw is mirrored so both drain outward toward
+  // the screen edges), then the frame is drawn over both so its inner
+  // bezel overlaps the fill edges.
+  //
+  // RED (healthbarRed, 512x512): the frame band and the orange fill
+  // strip live in ONE image ("框+填充在同一張圖"); regions below are
+  // measured from the PNG's alpha channel. The frame's interior window
+  // is a fully transparent cavity (background removal keyed it out),
+  // and the fill strip's dark left tail was eaten by the same pass —
+  // so the fill is cropped from where the art is still opaque.
+  //
+  // BLUE (healthbarBlueFrame 2123x595 + healthbarBlue): the shipped art
+  // is a full glass tube, so a derived frame with the window keyed to
+  // transparent was cut from it (window rect measured from the glass
+  // pixels). The fill crops the glass back from the ORIGINAL image and
+  // maps onto the window at ~1:1, keeping the segment art undistorted.
+  var GEO_RED = {
+    frame:  { x: 26, y: 126, w: 460, h: 154 },
+    window: { x: 97, y: 54, w: 330, h: 41 },   // cavity, frame-local
+    fill:   { x: 219, y: 317, w: 177, h: 53 }  // opaque orange run of the strip
+  };
+  var GEO_BLUE = {
+    frame:  { x: 0, y: 0, w: 2123, h: 595 },
+    window: { x: 359, y: 189, w: 1394, h: 184 },
+    fill:   { x: 362, y: 192, w: 1388, h: 178 }
+  };
   var BAR_TOP = 18;
   var BAR_MARGIN = 24;
   var TRACK = 'rgba(14, 10, 12, 0.85)'; // cavity backdrop behind the fill
 
-  // Blue side placeholder, pinned verbatim by the task brief: tint the red
-  // bar with a hue filter until a real blue asset lands. NOTE: 150deg turns
-  // this art teal-green (red hue ~14deg + 150); a true blue would want
-  // ~210-240deg — swap point is this constant (ideally the loader entry).
-  var BLUE_FILTER = 'hue-rotate(150deg)';
+  // Display sizes: red pins the classic 360 width; blue is sized to the
+  // same display HEIGHT so the two tops and the weapon labels align.
+  var RED_W = 360;
+  var BLUE_W = Math.round(2123 * (154 * RED_W / 460) / 595); // ≈430, height-matched
+  var BAR_W = RED_W; // kept for the weapon-label column layout
 
   // ---------------------------------------------------------------- *
   // Gauge (gauge): the art ships with a FIXED needle baked in at 45
@@ -181,25 +195,40 @@
     return Math.floor(t * 3) % 2 === 0;
   }
 
-  // One health bar drawn at the shared top-left slot. `filter` tints both
-  // the fill and the frame (P2's blue placeholder). Callers mirror the
-  // whole bar with a transform; text is never drawn mirrored.
-  function drawBar(ctx, img, hp, filter) {
-    var s = BAR_W / HB_FRAME.w;
+  // ---------------------------------------------------------------- *
+  // Ammo badge (btn-ammo): the button art sits beside each weapon line.
+  // Normal state = plenty of ammo; pressed state = a finite weapon down
+  // to its last shot (the low-ammo cue). Infinite ammo stays normal.
+  var BADGE_S = 46;
+  function drawBadge(ctx, imgs, cannon, cx, cy) {
+    var img = imgs ? imgs.btnAmmoNormal : null;
+    var left = cannon && cannon.ammo ? cannon.ammo[cannon.weapon] : undefined;
+    if (left !== undefined && left !== Infinity && left <= 1 && imgs.btnAmmoPressed) {
+      img = imgs.btnAmmoPressed;
+    }
+    if (!img) { return; }
+    ctx.drawImage(img, cx - BADGE_S / 2, cy - BADGE_S / 2, BADGE_S, BADGE_S);
+  }
+
+  // One health bar drawn at the shared top-left slot. `geo` selects the
+  // asset geometry; frameImg/fillImg may be the same image (red) or two
+  // cuts of one art (blue). Callers mirror the whole bar with a
+  // transform; text is never drawn mirrored.
+  function drawBar(ctx, geo, frameImg, fillImg, hp, dispW) {
+    var s = dispW / geo.frame.w;
     var frac = hpFrac(hp);
-    var wx = BAR_MARGIN + HB_WINDOW.x * s;
-    var wy = BAR_TOP + HB_WINDOW.y * s;
-    var ww = HB_WINDOW.w * s;
-    var wh = HB_WINDOW.h * s;
+    var wx = BAR_MARGIN + geo.window.x * s;
+    var wy = BAR_TOP + geo.window.y * s;
+    var ww = geo.window.w * s;
+    var wh = geo.window.h * s;
     ctx.save();
-    ctx.filter = filter || 'none';
     ctx.fillStyle = TRACK;
     ctx.fillRect(wx, wy, ww, wh);
     if (frac > 0) {
       // source-crop keeps the segment lines' width while draining
-      ctx.drawImage(img, HB_FILL.x, HB_FILL.y, HB_FILL.w * frac, HB_FILL.h, wx, wy, ww * frac, wh);
+      ctx.drawImage(fillImg, geo.fill.x, geo.fill.y, geo.fill.w * frac, geo.fill.h, wx, wy, ww * frac, wh);
     }
-    ctx.drawImage(img, HB_FRAME.x, HB_FRAME.y, HB_FRAME.w, HB_FRAME.h, BAR_MARGIN, BAR_TOP, BAR_W, HB_FRAME.h * s);
+    ctx.drawImage(frameImg, geo.frame.x, geo.frame.y, geo.frame.w, geo.frame.h, BAR_MARGIN, BAR_TOP, dispW, geo.frame.h * s);
     ctx.restore();
   }
 
@@ -391,27 +420,44 @@
     }
     info = info || {};
     var W = ctx.canvas.width;
-    var bar = imgs ? imgs.healthbarRed : null;
+    var redImg = imgs ? imgs.healthbarRed : null;
+    var blueImg = imgs ? imgs.healthbarBlue : null;
+    var blueFrame = imgs ? (imgs.healthbarBlueFrame || blueImg) : null;
 
-    // health bars: P2 is the mirrored draw; blue = tinted red placeholder
-    if (bar) {
-      drawBar(ctx, bar, match.p1 && match.p1.hp, 'none');
+    // health bars: P1 red (left-anchored), P2 the real blue art (mirrored
+    // draw drains it outward toward the right edge)
+    if (redImg) {
+      drawBar(ctx, GEO_RED, redImg, redImg, match.p1 && match.p1.hp, RED_W);
+    }
+    if (blueFrame && blueImg) {
       ctx.save();
       ctx.translate(W, 0);
       ctx.scale(-1, 1);
-      drawBar(ctx, bar, match.p2 && match.p2.hp, BLUE_FILTER);
+      drawBar(ctx, GEO_BLUE, blueFrame, blueImg, match.p2 && match.p2.hp, BLUE_W);
       ctx.restore();
     }
 
-    // weapon + ammo line under each bar (bright on the side to move)
-    var barH = HB_FRAME.h * (BAR_W / HB_FRAME.w);
+    // weapon + ammo line under each bar (bright on the side to move),
+    // with the ammo button badge beside it — pressed state = special
+    // weapon down to its last shot
+    var barH = GEO_RED.frame.h * (RED_W / GEO_RED.frame.w);
     var labelY = BAR_TOP + barH + WEAPON_GAP;
     var p1 = match.p1 || {};
     var p2 = match.p2 || {};
-    label(ctx, weaponLabel(p1), BAR_MARGIN + BAR_W / 2, labelY, FONT_WEAPON,
+    var txt1 = weaponLabel(p1);
+    var txt2 = weaponLabel(p2);
+    label(ctx, txt1, BAR_MARGIN + BAR_W / 2, labelY, FONT_WEAPON,
       match.turn === 'P1' ? COLOR_WEAPON_ACTIVE : COLOR_WEAPON_IDLE);
-    label(ctx, weaponLabel(p2), W - BAR_MARGIN - BAR_W / 2, labelY, FONT_WEAPON,
+    label(ctx, txt2, W - BAR_MARGIN - BAR_W / 2, labelY, FONT_WEAPON,
       match.turn === 'P2' ? COLOR_WEAPON_ACTIVE : COLOR_WEAPON_IDLE);
+    if (imgs) {
+      ctx.font = FONT_WEAPON;
+      var tw1 = ctx.measureText(txt1).width;
+      drawBadge(ctx, imgs, p1, BAR_MARGIN + BAR_W / 2 - tw1 / 2 - 32, labelY - 9);
+      ctx.font = FONT_WEAPON;
+      var tw2 = ctx.measureText(txt2).width;
+      drawBadge(ctx, imgs, p2, W - BAR_MARGIN - BAR_W / 2 + tw2 / 2 + 32, labelY - 9);
+    }
 
     // timer / sudden death. timer <= 0 draws blank: with the clock
     // disabled the core parks timer at 0, and with it enabled expiry

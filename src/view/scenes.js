@@ -27,6 +27,8 @@
   var BANNER_TIME = 1;   // s the turn banner shows
   var RECOIL_TIME = 0.18; // s the barrel kick plays after firing
   var RECOIL_PX = 8;      // px the cannon shifts back at the kick's peak
+  var HOP_TIME = 0.5;     // s a jump's arc animation plays for
+  var HOP_HEIGHT = 70;    // px the hop arc rises above the lower endpoint
 
   // Per-side trail/tint colors (match the HUD's last-shot notches).
   var SIDE_COLOR = { P1: '#ff9a3d', P2: '#4fc3ff' };
@@ -260,13 +262,33 @@
       dmgPops: [],         // [{x, y, text, t0}] damage numbers
       hitFlashes: [],      // [{x, y, t0}] white bursts on struck cannons
       childFlights: [],    // cluster bomblet replays {points, impact, by, startT, done}
+      moveAnim: null,      // move/hop clone {side, fromX, fromY, toX, toY, t0, dur, arc}
       // AI turn state
-      ai: null,        // {phase:'wait', at} | {phase:'tween', from, to, power, t0}
+      ai: null,        // {phase:'wait'|'move'|'tween', ...}
       over: false
     };
 
     function sideCannon(side) { return side === 'P2' ? p2 : p1; }
     function isAiTurn() { return mode === 'ai' && match.turn === 'P2'; }
+
+    /**
+     * tryHop(side, dir) — jump the side's cannon JUMP_RANGE px in dir
+     * (-1/+1) through the core (Match.jump: AIM only, budget-capped),
+     * then play the arc as a presentation clone — the core is already
+     * seated at the landing spot, the sprite catches up over HOP_TIME.
+     * A refused jump (no budget, out of bounds) stays silent.
+     */
+    function tryHop(side, dir) {
+      var c = sideCannon(side);
+      var fromX = c.x;
+      var fromY = c.y;
+      var moved = match.jump(dir * CC.Cannon.JUMP_RANGE);
+      if (!moved) { return; }
+      b.moveAnim = {
+        side: side, fromX: fromX, fromY: fromY, toX: c.x, toY: c.y,
+        t0: S.t, dur: HOP_TIME, arc: true
+      };
+    }
 
     function cycleWeapon(c, dir) {
       var keys = Object.keys(CC.Weapons.LIST);
@@ -314,6 +336,7 @@
         by: snap.side
       };
       b.trail = null; // the old trail retires when a new shell flies
+      b.moveAnim = null; // a launch mid-move snaps the moving clone down
       b.recoil[snap.side] = RECOIL_TIME;
       CC.Audio.play('shot');
       CC.Audio.whistleStart();
@@ -402,6 +425,12 @@
       if (key === 'Escape') { set('title'); return; }
       if (match.state !== 'AIM' && match.state !== 'CHARGE' && match.state !== 'SUDDEN') { return; }
       if (!human[match.turn]) { return; } // AI's move
+      // Shift + direction = jump (AIM only): a bound that clears crater
+      // rims and valley walls a walk cannot cross
+      if (e && e.shiftKey && match.state === 'AIM') {
+        if (key === 'a' || key === 'ArrowLeft') { tryHop(match.turn, -1); return; }
+        if (key === 'd' || key === 'ArrowRight') { tryHop(match.turn, 1); return; }
+      }
       var c = sideCannon(match.turn);
       if (key === 'e' || key === 'Tab') {
         if (key === 'Tab' && e) { e.preventDefault(); }
@@ -469,18 +498,43 @@
       b.recoil.P1 = Math.max(0, b.recoil.P1 - dt);
       b.recoil.P2 = Math.max(0, b.recoil.P2 - dt);
 
-      // AI turn: 1.2s think delay, then a 0.8s barrel tween, then fire.
+      // move/hop clone retires when its animation ends
+      if (b.moveAnim && S.t - b.moveAnim.t0 >= b.moveAnim.dur) { b.moveAnim = null; }
+
+      // AI turn: 1.2s think delay, then (AIM only) the repositioning move
+      // plays as a clone animation, then a 0.8s barrel tween, then fire.
+      // pickShot runs AFTER planMove has moved the core, so the solution
+      // is solved from the new stance.
       if (isAiTurn() && (st === 'AIM' || st === 'SUDDEN')) {
         if (!b.ai) {
           b.ai = { phase: 'wait', at: S.t + AI_THINK_DELAY };
         } else if (b.ai.phase === 'wait' && S.t >= b.ai.at) {
+          var preX = p2.x;
+          var preY = p2.y;
+          var mv = st === 'AIM' ? CC.AI.planMove(match, b.difficulty) : null;
           var shot = CC.AI.pickShot(match, b.difficulty);
-          // pickShot may go out of bounds — the view clamps.
+          b.ai = {
+            phase: mv ? 'move' : 'aim',
+            shot: shot,
+            fromX: preX, fromY: preY, toX: p2.x, toY: p2.y,
+            arc: !!(mv && mv.kind === 'jump'),
+            t0: S.t
+          };
+          if (mv) {
+            b.ai.dur = b.ai.arc ? HOP_TIME
+              : Math.abs(b.ai.toX - b.ai.fromX) / MOVE_RATE + 0.05;
+            b.moveAnim = {
+              side: 'P2', fromX: preX, fromY: preY, toX: p2.x, toY: p2.y,
+              t0: S.t, dur: b.ai.dur, arc: b.ai.arc
+            };
+          }
+        } else if (b.ai.phase === 'move' && S.t - b.ai.t0 >= b.ai.dur) {
+          b.moveAnim = null;
           b.ai = {
             phase: 'tween',
             from: p2.angle,
-            to: clamp(shot.angle, 0, ANGLE_MAX),
-            power: clamp(shot.power, 0, 100),
+            to: clamp(b.ai.shot.angle, 0, ANGLE_MAX),
+            power: clamp(b.ai.shot.power, 0, 100),
             t0: S.t
           };
         } else if (b.ai.phase === 'tween') {
@@ -671,8 +725,11 @@
       CC.HUD.draw(ctx, imgs, match, S.t, charge);
       var hint = '';
       if (b.flight) { hint = ''; }
-      else if (isAiTurn()) { hint = b.ai && b.ai.phase === 'tween' ? 'AI 調整砲管…' : 'AI 思考中…'; }
-      else if (human[match.turn]) { hint = 'A/D 走位 · W/S 仰角 · Q/E 換彈 · 長按空白蓄力，放開發射'; }
+      else if (isAiTurn()) {
+        hint = b.ai && b.ai.phase === 'tween' ? 'AI 調整砲管…'
+          : b.ai && b.ai.phase === 'move' ? 'AI 移動中…' : 'AI 思考中…';
+      }
+      else if (human[match.turn]) { hint = 'A/D 走位 · Shift+A/D 跳 · W/S 仰角 · Q/E 換彈 · 長按空白蓄力，放開發射'; }
       if (hint) { label(ctx, hint, W / 2, 160, FONT_HINT, MENU_HI); }
 
       if (b.banner && match.state === 'AIM' && S.t - b.banner.t0 < BANNER_TIME) {
@@ -683,12 +740,24 @@
       }
     };
 
-    // one cannon with its recoil offset applied (cloned stance)
+    // one cannon with its recoil offset applied (cloned stance); a live
+    // move animation rides over both — a jump arcs sine-high above the
+    // endpoints' line, a walk slides along it (the core is already seated
+    // at the destination; the sprite is catching up)
     function drawGun(ctx, c) {
       var p = b.recoil[c.side] > 0 ? b.recoil[c.side] / RECOIL_TIME : 0;
       var back = c.side === 'P1' ? -1 : 1; // kick away from the bore
+      var x = c.x + back * RECOIL_PX * p;
+      var y = c.y;
+      if (b.moveAnim && b.moveAnim.side === c.side) {
+        var ma = b.moveAnim;
+        var mp = clamp((S.t - ma.t0) / ma.dur, 0, 1);
+        x = ma.fromX + (ma.toX - ma.fromX) * mp;
+        var ground = ma.fromY + (ma.toY - ma.fromY) * mp;
+        y = ma.arc ? ground - Math.sin(mp * Math.PI) * HOP_HEIGHT : ground;
+      }
       CC.Sprites.drawCannon(ctx, S.imgs, {
-        side: c.side, x: c.x + back * RECOIL_PX * p, y: c.y, angle: c.angle
+        side: c.side, x: x, y: y, angle: c.angle
       });
     }
 

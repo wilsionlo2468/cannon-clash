@@ -29,6 +29,20 @@
   // normal only), matching what Weapons.settle measures.
   var NEAR_HIT = 50;
 
+  // Movement plan heuristics (Phase 6): the AI repositions BEFORE aiming.
+  // DODGE_RADIUS: an enemy landing closer than this triggers a step away.
+  // DODGE_DX: how far a dodge tries to walk. WALK_STEP: planMove applies
+  // a walk in small steps so terrain refusals stop it at the wall (the
+  // same read as the player's per-frame walking).
+  var DODGE_RADIUS = 90;
+  var DODGE_DX = 80;
+  var WALK_STEP = 5;
+  // A dodge/escape only counts as made when the walk covered at least
+  // this much — below it the move is a useless shuffle against an obstacle
+  // (5px against a crater rim "dodges" nothing), and hell should leap
+  // instead of shuffling.
+  var MOVE_MIN = 24;
+
   function dist(x1, y1, x2, y2) {
     var dx = x2 - x1;
     var dy = y2 - y1;
@@ -201,7 +215,110 @@
     };
   }
 
-  CC.AI = { pickShot: pickShot, THINK_DELAY: THINK_DELAY };
+  /**
+   * stanceClear(x, shooter, foe, wind, turn) -> boolean
+   * Would the perfect shot from a virtual stance at x (surface-seated,
+   * same side as shooter) reach the enemy with a clear corridor? A
+   * read-only probe — Cannon.muzzle only reads x/y/side, so a plain
+   * {x, y, side} stands in for the cannon while candidate positions are
+   * scored without mutating the real one.
+   */
+  function stanceClear(x, shooter, foe, wind, turn) {
+    var probe = { x: x, y: CC.Terrain.heightAt(x), side: shooter.side };
+    var perfect = perfectShot(probe, foe, wind, turn);
+    var dir = turn === 'P1' ? perfect.angle : 180 - perfect.angle;
+    var m = CC.Cannon.muzzle(probe, perfect.angle);
+    return corridor(m.x, m.y, dir, perfect.power, wind, foe).clear;
+  }
+
+  /**
+   * walkBy(match, dx) -> number — apply a walk in WALK_STEP slices so a
+   * terrain refusal (crater rim, valley wall) stops the AI at the obstacle
+   * with the distance already covered, exactly like the player's per-frame
+   * walking reads. Returns the px actually moved.
+   */
+  function walkBy(match, dx) {
+    var total = 0;
+    var sign = dx >= 0 ? 1 : -1;
+    var left = Math.abs(dx);
+    while (left > 0) {
+      var step = left < WALK_STEP ? left : WALK_STEP;
+      var moved = match.move(sign * step);
+      if (!moved) { break; }
+      total += moved;
+      left -= Math.abs(moved);
+    }
+    return total;
+  }
+
+  /**
+   * planMove(match, difficulty) -> {kind:'walk'|'jump', dx}|null
+   * The AI's repositioning decision for the current turn, applied to the
+   * core BEFORE aiming (the view animates it as a slide/hop clone, then
+   * solves the shot from the new stance). Difficulty-gated: easy never
+   * moves (the pinned fixed-target behaviour); normal walks; hell walks
+   * AND jumps (out of craters a walk cannot escape). Unknown difficulties
+   * throw, matching pickShot.
+   * Heuristics in priority order — deterministic, so the behaviour reads:
+   *   1. DODGE — the enemy's last landing sits within DODGE_RADIUS: step
+   *      directly away (jump instead when walking is refused and the
+   *      difficulty allows it — the way out of the pit they dug).
+   *   2. CORRIDOR — the perfect shot from the current stance is terrain-
+   *      blocked: probe candidate stances ±40/80/120/160px, walk to the
+   *      nearest clear one (hell jumps to it when the walk cannot).
+   *   3. else null — stay put.
+   */
+  function planMove(match, difficulty) {
+    if (difficulty !== 'normal' && difficulty !== 'hell') {
+      if (difficulty === 'easy') { return null; }
+      throw new Error('CC.AI.planMove: difficulty must be "easy", "normal" or "hell", got ' + difficulty);
+    }
+    var isP1 = match.turn === 'P1';
+    var me = isP1 ? match.p1 : match.p2;
+    var foe = isP1 ? match.p2 : match.p1;
+
+    // 1) dodge a fresh enemy landing nearby
+    var last = match.lastShot;
+    if (last && last.impact && me.moveBudget > 0 &&
+        Math.abs(last.impact.x - me.x) < DODGE_RADIUS) {
+      var away = me.x >= last.impact.x ? 1 : -1;
+      var moved = walkBy(match, away * DODGE_DX);
+      if (moved >= MOVE_MIN) { return { kind: 'walk', dx: moved }; }
+      if (difficulty === 'hell') {
+        var jumped = match.jump(away * CC.Cannon.JUMP_RANGE);
+        if (jumped) { return { kind: 'jump', dx: jumped }; }
+      }
+    }
+
+    // 2) leave a stance whose shot corridor the terrain blocks
+    if (!stanceClear(me.x, me, foe, match.wind, match.turn)) {
+      var OFFSETS = [40, 80, 120, 160];
+      var best = null;
+      for (var i = 0; i < OFFSETS.length && best === null; i++) {
+        for (var s = -1; s <= 1 && best === null; s += 2) {
+          var cx = me.x + OFFSETS[i] * s;
+          if (cx < CC.Cannon.X_MIN || cx > CC.Cannon.X_MAX) { continue; }
+          if (stanceClear(cx, me, foe, match.wind, match.turn)) {
+            best = OFFSETS[i] * s;
+          }
+        }
+      }
+      if (best !== null) {
+        var walked = walkBy(match, best);
+        if (walked >= MOVE_MIN) { return { kind: 'walk', dx: walked }; }
+        if (difficulty === 'hell') {
+          var target = best > 0
+            ? Math.min(best, CC.Cannon.JUMP_RANGE)
+            : Math.max(best, -CC.Cannon.JUMP_RANGE);
+          var hop = match.jump(target);
+          if (hop) { return { kind: 'jump', dx: hop }; }
+        }
+      }
+    }
+    return null;
+  }
+
+  CC.AI = { pickShot: pickShot, planMove: planMove, THINK_DELAY: THINK_DELAY };
 
   // Node test hook
   if (typeof module !== 'undefined' && module.exports) {

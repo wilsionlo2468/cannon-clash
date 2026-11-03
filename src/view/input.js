@@ -2,6 +2,7 @@
  * scene sink (browser global). Unified control map (both clusters drive
  * whichever side holds the turn — hot-seat, no per-side key sets):
  *   A/D or ←/→  walk (AIM only, per-turn budget)
+ *   Shift+A/D or Shift+←/→  jump over walls/crater rims (AIM, budget too)
  *   W/S or ↑/↓  elevation ±40 deg/s (clamped 0..85)
  *   SPACE hold→release  charge & fire (ping-pong curve, release = power)
  *   Q/E or Tab  cycle weapon (E/Tab forward, Q back)

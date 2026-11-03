@@ -370,3 +370,48 @@ test('foe reachable only past the field -> the corridor clears at the enemy-colu
     'the shell crossed the enemy column in the air: fictitious x ' +
     flight.impact.x.toFixed(1));
 });
+
+/* --- planMove (Phase 6): repositioning before aiming -----------------
+ * easy never moves; normal walks; hell walks AND jumps. Dodge first (an
+ * enemy landing within DODGE_RADIUS), then the corridor escape (blocked
+ * perfect shot -> walk to the nearest clear candidate stance).
+ */
+
+test('planMove: easy never moves; unknown difficulty throws', () => {
+  const { p2, match } = setup();
+  match.turn = 'P2';
+  match.lastShot = { impact: { x: p2.x + 10, y: p2.y } };
+  assert.strictEqual(AI.planMove(match, 'easy'), null, 'easy is a fixed target');
+  assert.strictEqual(p2.x, STANCE_P2.x, 'no repositioning on easy');
+  assert.throws(() => AI.planMove(match, 'nightmare'), /difficulty/);
+});
+
+test('planMove: a fresh enemy landing nearby triggers a dodge walk away', () => {
+  const { p2, match } = setup();
+  match.turn = 'P2';
+  match.lastShot = { impact: { x: 1240, y: 445 } }; // 60px to P2's left
+  const plan = AI.planMove(match, 'normal');
+  assert.ok(plan && plan.kind === 'walk' && plan.dx > 0, JSON.stringify(plan));
+  assert.ok(p2.x > STANCE_P2.x, 'moved away from the blast');
+  assert.ok(p2.moveBudget < C.MOVE_RANGE, 'the dodge spent budget');
+});
+
+test('planMove: the pinned duel needs no repositioning -> null', () => {
+  const { match } = setup();
+  match.turn = 'P2';
+  assert.strictEqual(AI.planMove(match, 'hell'), null,
+    'the platform-to-platform corridor is already clear');
+});
+
+test('planMove: hell jumps out of a pit whose rim refuses the walk', () => {
+  const { p2, match } = setup();
+  match.turn = 'P2';
+  // carve a fresh pit just left of the cannon so the dodge direction
+  // (right, away from an impact on the left) hits an intact steep rim
+  T.carve(p2.x - 30, p2.y + 10, 45);
+  p2.sink();
+  match.lastShot = { impact: { x: p2.x - 20, y: p2.y } };
+  const plan = AI.planMove(match, 'hell');
+  assert.strictEqual(plan.kind, 'jump', JSON.stringify(plan));
+  assert.ok(p2.x > STANCE_P2.x + 50, 'the leap covered real distance');
+});

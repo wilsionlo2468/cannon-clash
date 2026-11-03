@@ -108,3 +108,57 @@ test('cannon.move works headless (the AI turn simply never calls match.move)', (
   const { p1 } = setup();
   assert.strictEqual(p1.move(30), 30, 'the cannon-level API is state-blind');
 });
+
+// --- jump (Phase 6): a bound that skips the slope check, spending the
+// same per-turn budget ---
+
+test('jump crosses a span walking would refuse, spending the budget 1:1', () => {
+  const { p1, match } = setup();
+  p1.x = 420; // the wall begins at the platform edge (430)
+  assert.strictEqual(match.move(20), 0, 'walking into the wall is refused');
+  const landed = match.jump(80);
+  assert.strictEqual(landed, 80, 'the hop clears what the walk cannot');
+  assert.strictEqual(p1.x, 500);
+  assert.strictEqual(p1.moveBudget, C.MOVE_RANGE - 80, 'budget spent 1:1');
+  assert.strictEqual(p1.y, T.heightAt(500), 're-seated on the landing surface');
+});
+
+test('jump caps at JUMP_RANGE and at the remaining budget', () => {
+  const { p1, match } = setup();
+  assert.strictEqual(match.jump(500), C.JUMP_RANGE, 'one bound is capped');
+  assert.strictEqual(p1.moveBudget, C.MOVE_RANGE - C.JUMP_RANGE);
+  const left = C.MOVE_RANGE - C.JUMP_RANGE;
+  assert.strictEqual(match.jump(left + 40), left, 'budget-capped');
+  assert.strictEqual(p1.moveBudget, 0);
+  assert.strictEqual(match.jump(10), 0, 'no budget, no jump');
+});
+
+test('jump honours the field bounds', () => {
+  const { p1, match } = setup();
+  p1.x = 90;
+  assert.strictEqual(match.jump(-500), C.X_MIN - 90, 'clamped to X_MIN');
+  assert.strictEqual(p1.x, C.X_MIN);
+});
+
+test('jump escapes a fresh crater the walk refuses', () => {
+  const { p1, match } = setup();
+  // carve a pit under the cannon (normal shell radius 45): the whole walk
+  // across its rim is refused (the span must be walkable end to end), but
+  // a hop ignores the rim entirely
+  T.carve(p1.x, p1.y + 10, 45);
+  p1.sink();
+  const inPit = p1.y;
+  const dir = p1.x < 800 ? 1 : -1;
+  assert.strictEqual(match.move(160 * dir), 0, 'the rim refuses the full walk');
+  const jumped = match.jump(60 * dir);
+  assert.strictEqual(Math.abs(jumped), 60, 'the hop clears the rim');
+  assert.ok(p1.y < inPit - 20, 'landed on much higher ground than the pit floor');
+});
+
+test('jump is AIM-only at the match level', () => {
+  const { p1, match } = setup();
+  assert.strictEqual(match.startCharge(), 'CHARGE');
+  assert.strictEqual(match.jump(60), null, 'no hopping mid-charge');
+  match.fire();
+  assert.strictEqual(match.jump(60), null, 'no hopping mid-flight');
+});

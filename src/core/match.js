@@ -132,6 +132,19 @@
     };
 
     /**
+     * jump(dx) -> number|null — the current turn's cannon leaps dx px in
+     * one bound (Cannon.jump: skips the slope check, spends the same
+     * per-turn budget, capped per bound by Cannon.JUMP_RANGE). AIM only,
+     * same ruling as move — the stance freezes once the charge begins.
+     * Returns the px actually jumped (0 = no budget or out of bounds),
+     * null outside AIM.
+     */
+    match.jump = function (dx) {
+      if (match.state !== 'AIM') { return null; }
+      return cannonOf(match.turn).jump(dx);
+    };
+
+    /**
      * startCharge() -> 'CHARGE'|null — AIM -> CHARGE; the input layer
      * drives cannon.power from the charge clock while the key is held.
      * The charge always begins from ZERO: power used to survive across

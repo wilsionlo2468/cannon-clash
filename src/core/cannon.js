@@ -90,7 +90,8 @@
     /**
      * knock(dir) — heavy-shell shockwave: shove the cannon KNOCKBACK px
      * horizontally (dir is the unit direction, +1/-1), clamped to the
-     * field, then re-seat it on the surface below the new x.
+     * field, then re-seat it on the surface below the new x. Does not
+     * touch the move budget — being shoved is not walking.
      */
     cannon.knock = function (dir) {
       var x = cannon.x + (dir >= 0 ? 1 : -1) * KNOCKBACK;
@@ -99,15 +100,29 @@
     };
 
     /**
-     * knock(dir) — heavy-shell shockwave: shove the cannon KNOCKBACK px
-     * horizontally (dir is the unit direction, +1/-1), clamped to the
-     * field, then re-seat it on the surface below the new x. Does not
-     * touch the move budget — being shoved is not walking.
+     * jump(dx) -> number — leap dx px (signed) in one bound, spending the
+     * move budget 1:1 like walking. Unlike move(), the whole span is NOT
+     * slope-checked (Terrain.walkable is skipped): the hop clears crater
+     * rims and steep valley walls a walk would refuse — the way out when
+     * a heavy shell has dug you into a pit. The request is capped by both
+     * JUMP_RANGE and the remaining budget, then the field bounds; returns
+     * the px actually jumped (0 when nothing remains) and re-seats the
+     * cannon on the surface under the new x. Leaping off a platform edge
+     * is legal (knock can already shove you off) — the valley floor below
+     * is a real stance, not a trap.
      */
-    cannon.knock = function (dir) {
-      var x = cannon.x + (dir >= 0 ? 1 : -1) * KNOCKBACK;
-      cannon.x = x < X_MIN ? X_MIN : x > X_MAX ? X_MAX : x;
+    cannon.jump = function (dx) {
+      var cap = Math.min(cannon.moveBudget, JUMP_RANGE);
+      var want = Math.max(-cap, Math.min(cap, dx));
+      var nx = cannon.x + want;
+      if (nx < X_MIN) { nx = X_MIN; }
+      if (nx > X_MAX) { nx = X_MAX; }
+      var actual = nx - cannon.x;
+      if (!actual) { return 0; }
+      cannon.x = nx;
+      cannon.moveBudget -= Math.abs(actual);
       cannon.sink();
+      return actual;
     };
 
     /**
@@ -172,8 +187,9 @@
 
   // Per-turn walking budget (px), reset by the match every advance —
   // enough to reposition meaningfully on a platform, not to cross the
-  // field.
+  // field. A jump spends the same budget, capped per bound by:
   var MOVE_RANGE = 160;
+  var JUMP_RANGE = 120; // one leap crosses at most this many px
 
   CC.Cannon = {
     create: create,
@@ -182,7 +198,8 @@
     KNOCKBACK: KNOCKBACK,
     X_MIN: X_MIN,
     X_MAX: X_MAX,
-    MOVE_RANGE: MOVE_RANGE
+    MOVE_RANGE: MOVE_RANGE,
+    JUMP_RANGE: JUMP_RANGE
   };
 
   // Node test hook
